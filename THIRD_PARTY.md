@@ -36,6 +36,8 @@ SOFTWARE.
 
 Tabs show the tiles of Superlogical's Rex icon set, as converted by rex-rune. They are Superlogical's artwork of other owners' logos, with no published terms, so they are not kept in this repository: `scripts/icons` fetches them into `assets/icons/`, and a build includes whichever are there. See `assets/icons/NOTICE.md` before passing such a build on.
 
+On Windows, a build may also carry Rex's own app icon, from Rex.app, in place of Rexy's drawing. It is Superlogical's artwork too and is not kept here: see `assets/windows/NOTICE.md`.
+
 ## Libraries
 
 libghostty is used through the `libghostty-vt` Rust bindings of [libghostty-rs](https://github.com/Uzaaft/libghostty-rs), at a commit named in `Cargo.toml`: no release of them can yet restore a terminal snapshot. egui/eframe supplies the desktop interface, and resvg draws the icons. These and the remaining Cargo dependencies retain their respective upstream licenses; exact versions and sources are recorded in `Cargo.lock`.

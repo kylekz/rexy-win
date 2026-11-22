@@ -353,6 +353,10 @@ struct Link {
     target: Option<wire::Target>,
     /// The server is on this machine, and so are the files it can read.
     local: bool,
+    /// The server is reached through `ssh`, which on Windows forwards to a socket
+    /// in WSL: the server is not there, however it is reached.
+    #[cfg(windows)]
+    tunneled: bool,
     /// What is known of every terminal on the server, shown or not.
     blocks: HashMap<String, Block>,
     /// What each connection asks the server's keymap with, if this client has keys.
@@ -455,6 +459,10 @@ async fn run_connected(
         link.token = control.reconnect_token.take();
         link.target = Some(control.target.clone());
         link.local = tunnel.is_none() && matches!(control.target, wire::Target::Unix(_));
+        #[cfg(windows)]
+        {
+            link.tunneled = tunnel.is_some();
+        }
         let opened = Connection::open(&control, link, shared).await;
         // What the server would not answer is reason enough. Of a connection
         // that ended meanwhile, its worker alone knows why.
@@ -1516,6 +1524,22 @@ impl<'a> Connection<'a> {
         Ok(session.id.clone())
     }
 
+    /// Where each of these files is on the server's machine, if it can read them all.
+    async fn here(&self, files: &[upload::File]) -> Option<Vec<String>> {
+        let paths = files.iter().map(upload::File::path).collect::<Option<Vec<_>>>()?;
+        let paths = paths.iter().map(|path| path.to_string_lossy());
+        // WSL reads Windows' drives, and its own files by their names inside it. A
+        // server `ssh` reaches through WSL is elsewhere.
+        #[cfg(windows)]
+        if let wire::Target::Wsl { distro, .. } = &self.target
+            && !self.link.tunneled
+        {
+            let mounts = crate::wsl::mounts(distro).await;
+            return paths.map(|path| crate::wsl::path_in(&path, distro, &mounts)).collect();
+        }
+        self.link.local.then(|| paths.map(String::from).collect())
+    }
+
     /// The pane that speaks for a tab, in whatever session the tab is.
     fn front(&self, tab: &str) -> Option<String> {
         let state = self.shared.lock();
@@ -1727,9 +1751,8 @@ impl<'a> Connection<'a> {
             Action::Upload { pane, files } => {
                 let session = self.session(&pane)?;
                 // Files on the pane's own machine are named where they are.
-                let here = files.iter().map(|file| file.path().filter(|_| self.link.local));
-                if let Some(here) = here.collect::<Option<Vec<_>>>() {
-                    let quoted = here.iter().map(|path| upload::quoted(&path.to_string_lossy()));
+                if let Some(here) = self.here(&files).await {
+                    let quoted = here.iter().map(|path| upload::quoted(path));
                     let text = quoted.collect::<Vec<_>>().join(" ");
                     return self.input(Action::Paste { pane, text }).await;
                 }

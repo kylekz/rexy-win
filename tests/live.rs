@@ -1,4 +1,5 @@
 //! Run only against a disposable server, never the default personal socket.
+#![cfg(target_os = "linux")]
 use rexy::{
     backend::Client,
     model::{self, Action, Activity, Edit, Host, Size, Tab, View, Wait},

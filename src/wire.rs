@@ -9,7 +9,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, Stream, StreamExt, stream};
 use percent_encoding::percent_decode_str;
 use serde_json::{Value, json};
-use std::{collections::HashMap, fmt, net::Ipv6Addr, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt, net::Ipv6Addr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::{Notify, mpsc, oneshot},
@@ -37,6 +37,8 @@ const REFUSAL: &str = "no common API revision";
 const MAX_IN_FLIGHT: usize = 64;
 /// How long one address may take to answer, and to agree to a WebSocket.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a server in WSL may take, which may have to wait for WSL to start.
+const WSL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long one write may take, or one answer in a handshake.
 const STEP_TIMEOUT: Duration = Duration::from_secs(8);
 /// How often the control connection is looked over. A server not heard from between
@@ -212,34 +214,62 @@ fn lost(error: tungstenite::Error) -> anyhow::Error {
 /// One address a WebSocket can be opened to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
-    /// A Unix socket on this machine.
-    Unix(PathBuf),
+    /// A Unix socket on this machine. Its path is kept as it is written, the
+    /// way the server's machine reads it, whatever this one would make of it.
+    Unix(String),
     /// A `ws://` or `wss://` address, with nothing after its port.
     Net(Url),
+    /// A Unix socket in a WSL distribution, reached from Windows through a bridge
+    /// there. With no socket named, the distribution's own `rex` is asked for it.
+    Wsl { distro: String, socket: Option<String> },
+}
+
+/// The path of a Unix socket an endpoint names, as the server's machine reads it.
+pub fn unix_path(endpoint: &str) -> Option<String> {
+    // Rex writes a socket as a URL, its path percent-encoded.
+    if let Some(path) = endpoint.strip_prefix("unix://") {
+        let decoded = percent_decode_str(path).decode_utf8();
+        return Some(decoded.as_deref().unwrap_or(path).into());
+    }
+    let path = endpoint.strip_prefix("unix:");
+    path.or_else(|| endpoint.starts_with('/').then_some(endpoint)).map(str::to_owned)
 }
 
 /// The addresses an endpoint stands for, in the order to try them. A socket or a
 /// URL is one address. A bare host name is tried as Rex tries it: HTTPS on port 443,
 /// HTTPS on 7297, then HTTP on 7297. A bare host and port is tried with TLS, then without.
 pub fn targets(endpoint: &str) -> Result<Vec<Target>> {
-    // Rex writes a socket as a URL, its path percent-encoded.
-    if let Some(path) = endpoint.strip_prefix("unix://") {
-        let decoded = percent_decode_str(path).decode_utf8();
-        let path = decoded.as_deref().unwrap_or(path);
-        return Ok(vec![Target::Unix(path.into())]);
+    targets_from(endpoint, crate::wsl::home().as_deref())
+}
+
+/// The addresses an endpoint stands for, where a socket is in the WSL
+/// distribution `wsl` if one is home: Windows has no sockets of its own to name.
+pub fn targets_from(endpoint: &str, wsl: Option<&str>) -> Result<Vec<Target>> {
+    if let Some(path) = unix_path(endpoint) {
+        return Ok(vec![match wsl {
+            Some(distro) => {
+                // It is passed to a program in WSL, which might take another for a switch.
+                ensure!(path.starts_with('/'), "A socket in WSL is a path from /, not {path}");
+                Target::Wsl { distro: distro.into(), socket: Some(path) }
+            }
+            None => Target::Unix(path),
+        }]);
     }
-    let path = endpoint.strip_prefix("unix:");
-    if let Some(path) = path.or_else(|| endpoint.starts_with('/').then_some(endpoint)) {
-        return Ok(vec![Target::Unix(path.into())]);
+    if let Some(rest) = endpoint.strip_prefix("wsl://") {
+        let (distro, socket) = rest.find('/').map_or((rest, ""), |slash| rest.split_at(slash));
+        ensure!(!distro.is_empty(), "Name a WSL distribution after wsl://, as in wsl://Ubuntu");
+        ensure!(crate::wsl::named(distro), "WSL has no distribution called {distro}");
+        let socket = (socket.len() > 1).then(|| socket.to_owned());
+        return Ok(vec![Target::Wsl { distro: distro.into(), socket }]);
     }
     if endpoint.contains("://") {
         let mut url = Url::parse(endpoint)?;
         let scheme = match url.scheme() {
             "http" | "ws" => "ws",
             "https" | "wss" => "wss",
-            _ => {
-                bail!("Use a Unix socket path, a host name, or an ssh://, ws:// or wss:// endpoint")
-            }
+            _ => bail!(
+                "Use a Unix socket path, a host name, or an ssh://, wsl://, ws:// or wss:// endpoint"
+            ),
         };
         url.set_scheme(scheme).map_err(|_| anyhow!("Invalid endpoint scheme"))?;
         url.set_path("");
@@ -275,16 +305,37 @@ fn host_port(url: &Url) -> Result<(&str, u16)> {
     Ok((host.trim_start_matches('[').trim_end_matches(']'), port))
 }
 
+/// How long an address may take to answer, and to agree to a WebSocket.
+fn connect_timeout(target: &Target) -> Duration {
+    match target {
+        Target::Wsl { .. } => WSL_CONNECT_TIMEOUT,
+        _ => CONNECT_TIMEOUT,
+    }
+}
+
 /// Open a WebSocket to one address.
 pub async fn socket(target: &Target, path: &str, protocol: &str) -> Result<Socket> {
-    tokio::time::timeout(CONNECT_TIMEOUT, async {
+    tokio::time::timeout(connect_timeout(target), async {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let (io, mut url): (Box<dyn Io>, Url) = match target {
+            #[cfg(unix)]
             Target::Unix(socket) => {
                 let unix = tokio::net::UnixStream::connect(socket).await;
                 let unix = unix.context("Connect to Rex Unix socket")?;
                 (Box::new(unix), Url::parse("ws://localhost")?)
             }
+            #[cfg(not(unix))]
+            Target::Unix(_) => {
+                bail!("Unix sockets are not reachable from Windows; use wsl://…")
+            }
+            #[cfg(windows)]
+            Target::Wsl { distro, socket } => {
+                let socket = socket.as_deref().context("No socket was found in WSL")?;
+                let bridge = crate::wsl::Bridge::open(distro, socket)?;
+                (Box::new(bridge), Url::parse("ws://localhost")?)
+            }
+            #[cfg(not(windows))]
+            Target::Wsl { .. } => bail!("wsl:// endpoints are reached only from Windows"),
             Target::Net(url) => {
                 let tcp = tokio::net::TcpStream::connect(host_port(url)?).await?;
                 tcp.set_nodelay(true)?;
@@ -297,9 +348,15 @@ pub async fn socket(target: &Target, path: &str, protocol: &str) -> Result<Socke
         let config = WebSocketConfig::default()
             .max_message_size(Some(64 * 1024 * 1024))
             .max_frame_size(Some(16 * 1024 * 1024));
-        let (socket, response) =
-            tokio_tungstenite::client_async_tls_with_config(request, io, Some(config), None)
-                .await?;
+        let opened =
+            tokio_tungstenite::client_async_tls_with_config(request, io, Some(config), None).await;
+        // What a bridge to WSL fails with is its own words, which need nothing more said.
+        #[cfg(windows)]
+        let opened = opened.map_err(|error| match error {
+            tungstenite::Error::Io(error) if matches!(target, Target::Wsl { .. }) => error.into(),
+            error => anyhow::Error::from(error),
+        });
+        let (socket, response) = opened?;
         ensure!(
             response.headers().get("Sec-WebSocket-Protocol").and_then(|h| h.to_str().ok())
                 == Some(protocol),
@@ -325,6 +382,16 @@ async fn reach(
     let several = targets.len() > 1;
     let mut failure = anyhow!("This endpoint has no address");
     for target in targets {
+        // A socket in WSL is asked for once, here: the terminals' streams go to
+        // the one found.
+        #[cfg(windows)]
+        let target = match crate::wsl::resolved(target).await {
+            Ok(target) => target,
+            Err(error) => {
+                failure = error;
+                continue;
+            }
+        };
         match socket(&target, path, protocol).await {
             Ok(socket) => return Ok((socket, target)),
             Err(error) => failure = error,
@@ -479,7 +546,10 @@ impl Control {
     ) -> Result<Self> {
         let (mut socket, target) = reach(endpoint, last, "/api/control", CONTROL_PROTOCOL).await?;
         // This machine's name tells this client from the same on another.
+        #[cfg(unix)]
         let machine = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default();
+        #[cfg(not(unix))]
+        let machine = std::env::var("COMPUTERNAME").unwrap_or_default();
         let mut hello = json!({
             "type": "hello",
             "api_revision": REVISIONS.end(),

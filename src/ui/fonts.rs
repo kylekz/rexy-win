@@ -23,6 +23,11 @@ const EMOJI: &str = "emoji";
 /// The family that draws the marks of programs and of places: the icons that
 /// Nerd Fonts keep where Unicode leaves room for anyone's own.
 const ICONS: &str = "icons";
+/// Windows' own font of symbols, which Windows itself draws a symbol of no script
+/// in. fontique names it as no kind of font, so the desktop's choice never comes to
+/// it, and what only it has, as `⏵`, would be drawn as a box.
+#[cfg(windows)]
+const SYMBOLS: &str = "Segoe UI Symbol";
 
 /// What a cell's text is, by the font that should draw it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -127,6 +132,34 @@ impl Machine {
             }
         }
     }
+
+    /// Windows' font of symbols, for text that is neither a picture nor a mark and
+    /// begins with a symbol of no script, where it has one. It is asked before the
+    /// desktop's choice, which would draw some such symbols as pictures.
+    #[cfg(windows)]
+    fn symbol(&self, request: &FallbackRequest<'_>) -> Option<FontInsert> {
+        use unicode_script::{Script, UnicodeScript};
+        if let FontFamily::Name(family) = request.family
+            && [EMOJI, ICONS].contains(&&**family)
+        {
+            return None;
+        }
+        let wanted = request.cluster.chars().next()?;
+        if !matches!(wanted.script(), Script::Common | Script::Inherited | Script::Unknown) {
+            return None;
+        }
+        let mut listed = self.listed.lock();
+        let symbols = [QueryFamily::Named(SYMBOLS)];
+        let has = |font: &QueryFont| {
+            font.charmap().and_then(|map| map.map(wanted)).is_some_and(|glyph| glyph != 0)
+        };
+        let font = find(&mut listed, symbols, Attributes::default(), has)?;
+        Some(FontInsert {
+            name: format!("{SYMBOLS}:{}", font.index),
+            data: data(font),
+            families: Vec::new(),
+        })
+    }
 }
 
 /// The first font among `families` in their order, of a `look`, that `fits`.
@@ -154,6 +187,10 @@ fn data(font: QueryFont) -> FontData {
 
 impl FontProvider for Machine {
     fn font_for(&self, request: &FallbackRequest<'_>) -> Option<FontInsert> {
+        #[cfg(windows)]
+        if let Some(symbol) = self.symbol(request) {
+            return Some(symbol);
+        }
         let FontFamily::Name(family) = request.family else {
             return None;
         };
@@ -194,7 +231,8 @@ impl FontProvider for Machine {
 /// Have a window find fonts on this machine: the families the user has
 /// `named`, which go ahead of the terminal's own, and behind every font of the
 /// window's whatever draws what none of them can. This client's own finder is
-/// asked first, for its two families, and then the desktop's choice is taken.
+/// asked first, for its two families, and on Windows for symbols, and then the
+/// desktop's choice is taken.
 pub fn install(ctx: &egui::Context, named: Vec<String>) {
     let list = || {
         let all = CollectionOptions { shared: false, system_fonts: true };

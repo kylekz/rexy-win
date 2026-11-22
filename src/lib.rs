@@ -9,3 +9,4 @@ pub mod terminal;
 pub mod ui;
 pub mod upload;
 mod wire;
+pub mod wsl;

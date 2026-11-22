@@ -21,6 +21,13 @@ pub const LEAST_WINDOW: [f32; 2] = [640.0, 420.0];
 const PAUSE: Duration = Duration::from_secs(1);
 
 /// Where the user's programs keep what they remember.
+#[cfg(windows)]
+pub fn state_home() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+}
+
+/// Where the user's programs keep what they remember.
+#[cfg(not(windows))]
 pub fn state_home() -> Option<PathBuf> {
     let home = || Some(std::env::home_dir()?.join(".local/state"));
     let state = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from);

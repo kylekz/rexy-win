@@ -259,12 +259,19 @@ impl App {
         };
         let paste = ui.input(|i| i.events.iter().find_map(paste));
         let paste = paste.filter(|_| response.hovered() && !tracking);
+        // Windows keeps no such selection: there it pastes what was copied.
+        #[cfg(windows)]
+        let middle = ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Middle));
+        #[cfg(windows)]
+        let middle = middle && response.hovered() && !tracking;
         // Files dropped on the window are for the pane they landed on, or the
         // one in use where the desktop does not say where that was.
         let here = if ui.input(|i| i.pointer.has_pointer()) { over } else { active };
         let dropped = if here && live { std::mem::take(&mut self.dropped) } else { Vec::new() };
         let pressed = response.clicked() || response.drag_started() || paste.is_some();
         let pressed = pressed || !dropped.is_empty();
+        #[cfg(windows)]
+        let pressed = pressed || middle;
         if pressed || picked {
             self.focused = Some(pane.id.clone());
             // A pane that is this window's, and where the server has the keyboard
@@ -274,6 +281,10 @@ impl App {
             if !active || !pane.owner || tab.focus.as_ref() != Some(&pane.id) || behind {
                 actions.push(Action::FocusPane { pane: pane.id.clone() });
             }
+        }
+        #[cfg(windows)]
+        if middle {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
         }
         if let Some(text) = paste {
             // What is pasted is typed, and typing lets go of what is selected.

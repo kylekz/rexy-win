@@ -6,7 +6,7 @@ A small, fast, native Linux client for [Rex](https://www.superlogical.com/rex), 
 
 Every Rex server you use, with its sessions and tabs, in one window: a sidebar that tells you what each agent is doing, split panes, and a Ghostty terminal in each of them. Closing the window leaves your sessions running, and connecting never starts or installs a server.
 
-Rexy is unofficial and not affiliated with Superlogical. It is early software for Linux, on Wayland and X11.
+Rexy is unofficial and not affiliated with Superlogical. It is early software for Linux, on Wayland and X11, and runs on Windows with Rex in WSL.
 
 ## Features
 
@@ -81,6 +81,30 @@ With the mouse: drag the line between two panes to resize them, drag a pane's he
 - **Not yet:** moving a pane to another session, animated pictures.
 
 Rexy speaks revisions 13 to 18 of Rex's control API, and refuses a server too old for the first of them.
+
+## Windows
+
+Rexy runs on Windows 11 x64 as a client for Rex in WSL, since Rex does not run on Windows itself. It needs WSL 2 with Rex installed in the default distribution, and `perl` there, which Ubuntu and Debian have.
+
+- **Home** is the one Rex in WSL follows, as `rex hosts` has it. The default distribution is asked first, which starts it if it is stopped, then any other already running; no other is started to ask. `REX_HOME` and `--server` still come first.
+- **`wsl://DISTRO[/SOCKET]`** reaches a server in a distribution, as in `wsl://Ubuntu`. Without a socket, that distribution's `rex` is asked where its server listens.
+- **`ssh://` runs inside WSL:** `ssh` in home's distribution, or else the one whose Rex named home, or else the default one, forwards the server's socket there, so it needs keys and a config that work in WSL.
+- **State** is kept in `%LOCALAPPDATA%\rexy`.
+
+To install, run `rexy-<version>-setup.exe`. It installs for you alone, with no administrator, and puts Rexy in the Start menu under the name its notifications go by. The zip holds the same files, to unpack anywhere.
+
+To build, you need Rust 1.100, Zig 0.17.1 and Visual Studio's C++ build tools with the Windows SDK; packaging also needs [Inno Setup 6](https://jrsoftware.org/isinfo.php):
+
+```powershell
+scripts\check.ps1      # formatting, lints, tests and a release build; -Fast skips the build
+scripts\package.ps1    # dist\rexy-<version>-windows-x64.zip and dist\rexy-<version>-setup.exe
+```
+
+Both find Zig on `PATH`, where winget puts it, or in `ZIG`, and build in `C:\t\rexy` unless `CARGO_TARGET_DIR` says otherwise: Ghostty's build goes too deep for a longer path.
+
+`rexy --help`, `--version` and `--probe` print to the terminal they were run from, but PowerShell does not wait for a windowed program, so its prompt can come back first. Pipe it, as in `rexy --probe | Out-Host`, to wait for it and its exit code.
+
+Not yet on Windows: a notification clicked in the Action Center, once its toast has gone, does not reopen its pane. The window is drawn through Direct3D with wgpu, never OpenGL, which can leave it blank there.
 
 ## Development
 

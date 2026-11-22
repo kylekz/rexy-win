@@ -13,7 +13,7 @@ use eframe::egui::{
 
 /// The window's ground where no terminal lends its own, and a card that has
 /// no terminal to take its ground from.
-const VIEW: Color32 = Color32::from_rgb(0x16, 0x16, 0x19);
+pub const VIEW: Color32 = Color32::from_rgb(0x16, 0x16, 0x19);
 pub const CARD: Color32 = Color32::from_rgb(0x0b, 0x0b, 0x0d);
 const POPOVER: Color32 = Color32::from_rgb(0x26, 0x26, 0x2b);
 pub const TEXT: Color32 = Color32::WHITE;
@@ -642,12 +642,59 @@ fn raster(drawing: &str, pixels: usize) -> egui::ColorImage {
 }
 
 /// The window's icon, for a desktop that takes it from the window. One that goes
-/// by the desktop entry draws the same picture.
+/// by the desktop entry draws the same picture. On Windows it is Rex's own, if
+/// that was at hand when this was built.
 pub fn icon() -> egui::IconData {
-    const SIDE: usize = 128;
-    let image = raster(include_str!("../../assets/dev.rexy.client.svg"), SIDE);
+    #[cfg(windows)]
+    if let Some(png) = REX_ICON {
+        return decode(png);
+    }
+    drawn(128)
+}
+
+/// Rexy's own drawing, as an icon.
+fn drawn(side: usize) -> egui::IconData {
+    let image = raster(include_str!("../../assets/dev.rexy.client.svg"), side);
     let rgba = image.pixels.iter().flat_map(Color32::to_srgba_unmultiplied);
-    egui::IconData { rgba: rgba.collect(), width: SIDE as u32, height: SIDE as u32 }
+    egui::IconData { rgba: rgba.collect(), width: side as u32, height: side as u32 }
+}
+
+/// Rex's own icon, as a PNG, if it was at hand when this was built. It is not
+/// kept in this repository: see `assets/windows/NOTICE.md`.
+#[cfg(windows)]
+const REX_ICON: Option<&[u8]> = include!(concat!(env!("OUT_DIR"), "/rex_icon.rs"));
+
+/// The program's icon as a PNG, which Windows draws on its toasts: Rex's own,
+/// or else Rexy's drawing.
+#[cfg(windows)]
+pub fn app_icon() -> &'static [u8] {
+    static DRAWN: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    REX_ICON.unwrap_or_else(|| DRAWN.get_or_init(|| encode(&drawn(256))))
+}
+
+#[cfg(windows)]
+fn decode(png: &[u8]) -> egui::IconData {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(png));
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().expect("the bundled icon is a PNG");
+    let size = reader.output_buffer_size().expect("the bundled icon has a size");
+    let mut rgba = vec![0; size];
+    let frame = reader.next_frame(&mut rgba).expect("the bundled icon is a PNG");
+    assert_eq!(frame.color_type, png::ColorType::Rgba, "the bundled icon is RGBA");
+    rgba.truncate(frame.buffer_size());
+    egui::IconData { rgba, width: frame.width, height: frame.height }
+}
+
+#[cfg(windows)]
+fn encode(icon: &egui::IconData) -> Vec<u8> {
+    let mut png = Vec::new();
+    let mut encoder = png::Encoder::new(&mut png, icon.width, icon.height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().expect("a PNG is written to memory");
+    writer.write_image_data(&icon.rgba).expect("a PNG is written to memory");
+    writer.finish().expect("a PNG is written to memory");
+    png
 }
 
 /// A flat button that draws its own symbol.

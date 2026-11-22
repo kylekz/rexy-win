@@ -22,7 +22,6 @@ futures-util = { version = "0.3", features = ["sink"] }
 # Ghostty's terminal. No release can restore a snapshot yet, so a commit is named.
 # Its png feature decodes the pictures programs send as PNG, with a crate already here.
 libghostty-vt = { git = "https://github.com/Uzaaft/libghostty-rs", rev = "483ea3d5247b214060da58ef6037a95f30ae89fb", features = ["png"] }
-libc = "0.2"
 # Already here through url. Rex writes a socket's path percent-encoded.
 percent-encoding = "2"
 # Already here through libghostty-vt. A pasted picture is sent as a PNG.
@@ -36,6 +35,13 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt", "macros", "net", "time", "sync", "io-util", "process"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 url = "2"
+# A new upload's name.
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
 # Wayland lets a window come to the front only by asking in its own words. These are
 # the releases the window is built on already.
 wayland-backend = { version = "0.3", features = ["client_system"] }
@@ -43,6 +49,25 @@ wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 # Speaks to the desktop's notification service.
 zbus = { version = "6.3", default-features = false, features = ["tokio"] }
+
+[target.'cfg(windows)'.dependencies]
+# On Windows the window is drawn through Direct3D: what OpenGL draws there can
+# stay off the screen, the window white, though every frame is drawn.
+eframe = { version = "0.37.0", default-features = false, features = ["wgpu"] }
+# Hands a link to the program Windows opens such links with, keeps the
+# processes that reach WSL from outliving this one, colours the title bar, prints
+# to the console it was run from, and tells Windows what this program is called.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Security", "Win32_System_Com", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# Shows notes as toasts. The release the window is built on already.
+windows = { version = "0.62", features = ["Data_Xml_Dom", "UI_Notifications"] }
+# Already here through egui_system_font_provider. Tells a symbol, which Windows'
+# own font for symbols draws, from a letter of some script.
+unicode-script = "0.5"
+
+# Gives the program its icon and version on Windows. Build scripts run on the
+# machine that builds, so it is that machine this is chosen by.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 lto = "thin"

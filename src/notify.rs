@@ -1,7 +1,8 @@
 //! Word to the desktop of what a pane has to say while nobody is looking at it, by
 //! way of the notification service on the session's D-Bus. Nothing here waits on
 //! the window: one that is out of sight draws nothing, and is just the one whose
-//! panes need speaking for.
+//! panes need speaking for. On Windows notes are toasts. Elsewhere there is no such
+//! service, and notes are held as they would be, then let go.
 use std::{
     collections::{HashMap, HashSet},
     sync::{
@@ -12,20 +13,38 @@ use std::{
 };
 
 use futures_util::StreamExt;
-use tokio::time::{Instant, sleep_until, timeout};
+#[cfg(target_os = "linux")]
+use tokio::time::timeout;
+use tokio::time::{Instant, sleep_until};
+#[cfg(windows)]
+use windows::{
+    Data::Xml::Dom::XmlDocument,
+    Foundation::TypedEventHandler,
+    UI::Notifications::{
+        ToastDismissalReason, ToastDismissedEventArgs, ToastNotification, ToastNotificationManager,
+        ToastNotifier,
+    },
+    core::{HSTRING, Ref},
+};
+#[cfg(target_os = "linux")]
 use zbus::{MatchRule, MessageStream, wire::Variant};
 
 /// What the desktop knows this program as.
 pub const APP_ID: &str = "dev.rexy.client";
+#[cfg(any(target_os = "linux", windows))]
 const NAME: &str = "Rexy";
+#[cfg(target_os = "linux")]
 const SERVICE: &str = "org.freedesktop.Notifications";
+#[cfg(target_os = "linux")]
 const PATH: &str = "/org/freedesktop/Notifications";
 /// How long a note waits to be sent, for the window to say its pane is being looked
 /// at. It is also the least time between two notes of one pane.
 const HOLD: Duration = Duration::from_millis(500);
 /// How long the same words from the same pane go without saying twice.
+#[cfg(any(target_os = "linux", windows))]
 const REPEAT: Duration = Duration::from_secs(10);
 /// How long the service has to answer.
+#[cfg(target_os = "linux")]
 const PATIENCE: Duration = Duration::from_secs(3);
 /// The most of a note's text that is passed on.
 const MAX_TEXT: usize = 400;
@@ -158,6 +177,7 @@ impl Desktop {
 }
 
 /// A note the desktop has been given.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct Shown {
     id: u32,
     body: String,
@@ -165,6 +185,7 @@ struct Shown {
 }
 
 #[derive(Default)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct Worker {
     bus: Option<Bus>,
     muted: HashSet<String>,
@@ -238,6 +259,7 @@ impl Worker {
     }
 
     /// Give the desktop a note, in place of the one its pane gave before.
+    #[cfg(target_os = "linux")]
     async fn send(&mut self, note: Note) {
         let before = self.shown.get(&note.pane);
         if before.is_some_and(|shown| shown.body == note.body && shown.at.elapsed() < REPEAT) {
@@ -272,6 +294,7 @@ impl Worker {
     }
 
     /// Ask something of the service. One that says no has not lost the bus.
+    #[cfg(target_os = "linux")]
     async fn call<R>(
         &mut self,
         method: &str,
@@ -293,6 +316,7 @@ impl Worker {
     }
 
     /// Take in what the service says of the notes it was given.
+    #[cfg(target_os = "linux")]
     fn signalled(&mut self, signal: &zbus::Message, picked: &impl Fn(String, Option<&str>)) {
         let header = signal.header();
         let body = signal.body();
@@ -320,6 +344,7 @@ impl Worker {
 }
 
 /// The session's bus, and what the notification service on it says.
+#[cfg(target_os = "linux")]
 struct Bus {
     connection: zbus::Connection,
     signals: MessageStream,
@@ -327,6 +352,7 @@ struct Bus {
     markup: bool,
 }
 
+#[cfg(target_os = "linux")]
 impl Bus {
     async fn open() -> Option<Self> {
         let connection = zbus::Connection::session().await.ok()?;
@@ -344,6 +370,217 @@ impl Bus {
         let able: Vec<String> = able.body().deserialize().ok()?;
         let markup = able.iter().any(|able| able == "body-markup");
         Some(Self { connection, signals, markup })
+    }
+}
+
+/// Nothing to speak to: no bus is ever found, so no note is shown or picked.
+#[cfg(not(any(target_os = "linux", windows)))]
+#[allow(dead_code)]
+struct Bus {
+    signals: futures_util::stream::Pending<Result<(), ()>>,
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+impl Worker {
+    async fn send(&mut self, _note: Note) {}
+
+    async fn call<R>(&mut self, _method: &str, _body: &impl Sized) -> Option<R> {
+        None
+    }
+
+    fn signalled(&mut self, _signal: &(), _picked: &impl Fn(String, Option<&str>)) {}
+}
+
+/// The group every toast of this program's is in. Its tag is its pane's.
+#[cfg(windows)]
+const GROUP: &str = "rexy";
+
+/// Windows shows toasts only of a program it knows by name. This process goes by
+/// that name, which is kept among the user's own with what it is called and its
+/// icon. To be done before any window is opened.
+#[cfg(windows)]
+pub fn claim() {
+    use windows_sys::Win32::{
+        System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegSetKeyValueW},
+        UI::Shell::SetCurrentProcessExplicitAppUserModelID,
+    };
+    let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    // SAFETY: the name is a string that ends in a nul, and is not kept.
+    unsafe { SetCurrentProcessExplicitAppUserModelID(wide(APP_ID).as_ptr()) };
+    let key = wide(&format!("Software\\Classes\\AppUserModelId\\{APP_ID}"));
+    let icon = crate::ui::state_home().map(|state| state.join("rexy").join("icon.png"));
+    let kept = |icon: &std::path::PathBuf| {
+        std::fs::read(icon).is_ok_and(|kept| kept == crate::ui::app_icon())
+    };
+    let icon = icon.filter(|icon| kept(icon) || write_icon(icon).is_ok());
+    let icon = icon.map(|icon| icon.display().to_string());
+    let values = [("DisplayName", Some(NAME.to_owned())), ("IconUri", icon)];
+    for (name, value) in values {
+        let Some(value) = value else { continue };
+        let value = wide(&value);
+        // SAFETY: the key and the name are strings that end in a nul, and the
+        // value is as long as it is said to be. The key is made where it is not.
+        unsafe {
+            RegSetKeyValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                wide(name).as_ptr(),
+                REG_SZ,
+                value.as_ptr().cast(),
+                (value.len() * 2) as u32,
+            );
+        }
+    }
+}
+
+/// The program's icon as a file, for Windows to draw on its toasts. One an
+/// older build left there is replaced.
+#[cfg(windows)]
+fn write_icon(path: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(path.parent().unwrap_or(path))?;
+    std::fs::write(path, crate::ui::app_icon())
+}
+
+/// What Windows says of a toast it was given, by the number it was given with.
+#[cfg(windows)]
+enum Signal {
+    Activated(u32),
+    /// It is gone, and not to the Action Center.
+    Dismissed(u32),
+}
+
+/// Windows' notifier, and what it says of the toasts it was given.
+#[cfg(windows)]
+struct Bus {
+    notifier: ToastNotifier,
+    signals: futures_util::stream::BoxStream<'static, Result<Signal, ()>>,
+    said: flume::Sender<Signal>,
+    /// Each toast that may be on show, by its number. Only one that is kept
+    /// tells what becomes of it.
+    toasts: HashMap<u32, ToastNotification>,
+    last: u32,
+}
+
+#[cfg(windows)]
+impl Bus {
+    fn open() -> Option<Self> {
+        let id = HSTRING::from(APP_ID);
+        let notifier = ToastNotificationManager::CreateToastNotifierWithId(&id).ok()?;
+        let (said, heard) = flume::unbounded();
+        let signals = heard.into_stream().map(Ok).boxed();
+        Some(Self { notifier, signals, said, toasts: HashMap::new(), last: 0 })
+    }
+
+    /// Show a pane's note, in place of whatever toast the pane showed before:
+    /// they share a tag. What it goes by is given back.
+    fn show(&mut self, note: &Note) -> windows::core::Result<u32> {
+        let xml = format!(
+            "<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text>\
+             </binding></visual></toast>",
+            escaped(&note.summary),
+            escaped(&note.body),
+        );
+        let content = XmlDocument::new()?;
+        content.LoadXml(&HSTRING::from(xml))?;
+        let toast = ToastNotification::CreateToastNotification(&content)?;
+        toast.SetTag(&HSTRING::from(tag(&note.pane)))?;
+        toast.SetGroup(&HSTRING::from(GROUP))?;
+        self.last = self.last.wrapping_add(1);
+        let id = self.last;
+        let said = self.said.clone();
+        toast.Activated(&TypedEventHandler::new(move |_, _| {
+            let _ = said.send(Signal::Activated(id));
+            Ok(())
+        }))?;
+        let said = self.said.clone();
+        let dismissed = move |_: Ref<ToastNotification>, args: Ref<ToastDismissedEventArgs>| {
+            // One that times out is put away in the Action Center.
+            let reason = args.as_ref().map(ToastDismissedEventArgs::Reason);
+            if !matches!(reason, Some(Ok(ToastDismissalReason::TimedOut))) {
+                let _ = said.send(Signal::Dismissed(id));
+            }
+            Ok(())
+        };
+        toast.Dismissed(&TypedEventHandler::new(dismissed))?;
+        self.notifier.Show(&toast)?;
+        self.toasts.insert(id, toast);
+        Ok(id)
+    }
+}
+
+/// A pane's ID as a toast's tag, which can be no longer than 64.
+#[cfg(windows)]
+fn tag(pane: &str) -> String {
+    let skip = pane.chars().count().saturating_sub(64);
+    pane.chars().skip(skip).collect()
+}
+
+/// Text as it is written in a toast's XML.
+#[cfg(windows)]
+fn escaped(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
+}
+
+#[cfg(windows)]
+impl Worker {
+    /// Give Windows a note, in place of the one its pane gave before.
+    async fn send(&mut self, note: Note) {
+        let before = self.shown.get(&note.pane);
+        if before.is_some_and(|shown| shown.body == note.body && shown.at.elapsed() < REPEAT) {
+            return;
+        }
+        let before = before.map(|shown| shown.id);
+        if self.bus.is_none() {
+            self.bus = Bus::open();
+        }
+        let Some(bus) = &mut self.bus else { return };
+        // The new toast takes the old one's place on the screen, by its tag.
+        if let Some(before) = before {
+            bus.toasts.remove(&before);
+        }
+        if let Ok(id) = bus.show(&note) {
+            let (body, at) = (note.body, Instant::now());
+            self.shown.insert(note.pane, Shown { id, body, at });
+        }
+    }
+
+    /// All that is asked of Windows, besides what `send` asks, is to close a
+    /// note: to take it off the screen, and out of the Action Center.
+    async fn call<R>(&mut self, _method: &str, &(id,): &(u32,)) -> Option<R> {
+        let bus = self.bus.as_mut()?;
+        let toast = bus.toasts.remove(&id)?;
+        let _ = bus.notifier.Hide(&toast);
+        let (tag, group) = (toast.Tag().ok()?, toast.Group().ok()?);
+        let history = ToastNotificationManager::History().ok()?;
+        let _ = history.RemoveGroupedTagWithId(&tag, &group, &HSTRING::from(APP_ID));
+        None
+    }
+
+    /// Take in what Windows says of the toasts it was given.
+    fn signalled(&mut self, signal: &Signal, picked: &impl Fn(String, Option<&str>)) {
+        match *signal {
+            Signal::Activated(id) => {
+                if let Some((pane, _)) = self.shown.iter().find(|(_, shown)| shown.id == id) {
+                    picked(pane.clone(), None);
+                }
+            }
+            Signal::Dismissed(id) => {
+                self.shown.retain(|_, shown| shown.id != id);
+                if let Some(bus) = &mut self.bus {
+                    bus.toasts.remove(&id);
+                }
+            }
+        }
     }
 }
 

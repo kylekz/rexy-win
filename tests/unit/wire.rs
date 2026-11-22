@@ -264,6 +264,50 @@ fn an_endpoint_stands_for_the_addresses_to_try_in_order() {
 }
 
 #[test]
+fn a_wsl_endpoint_is_a_socket_in_that_distribution() {
+    let wsl = |socket: Option<&str>| {
+        vec![Target::Wsl { distro: "Ubuntu".into(), socket: socket.map(str::to_owned) }]
+    };
+    let of = |endpoint: &str| targets_from(endpoint, None).unwrap();
+    let socket = "/run/user/1000/rex/server.sock";
+    assert_eq!(of("wsl://Ubuntu"), wsl(None));
+    assert_eq!(of("wsl://Ubuntu/"), wsl(None));
+    assert_eq!(of("wsl://Ubuntu/run/user/1000/rex/server.sock"), wsl(Some(socket)));
+    assert!(targets_from("wsl://", None).is_err());
+    assert!(targets_from("wsl:///run/rex/server.sock", None).is_err());
+    // With home in WSL, a socket is one there: Windows has none of its own.
+    let home = |endpoint: &str| targets_from(endpoint, Some("Ubuntu")).unwrap();
+    assert_eq!(home("unix:///run/user/1000/rex/server.sock"), wsl(Some(socket)));
+    assert_eq!(home("unix:/run/user/1000/rex/server.sock"), wsl(Some(socket)));
+    assert_eq!(home(socket), wsl(Some(socket)));
+    assert_eq!(
+        home("wss://box.ts.net"),
+        vec![Target::Net(Url::parse("wss://box.ts.net").unwrap())]
+    );
+    let other = vec![Target::Wsl { distro: "Debian".into(), socket: None }];
+    assert_eq!(home("wsl://Debian"), other);
+    // Without, a socket is one on this machine.
+    assert_eq!(of(socket), vec![Target::Unix(socket.into())]);
+    // A socket in WSL is a path from the root, which no program takes for a switch,
+    // and a distribution has a name `wsl.exe` can be given.
+    for bad in ["unix:-eBEGIN{system(1)}", "unix:run/rex.sock", "unix://-e1"] {
+        assert!(targets_from(bad, Some("Ubuntu")).is_err(), "{bad:?} is no socket in WSL");
+    }
+    for bad in ["wsl://Ubu\"ntu", "wsl://Ubu\\ntu/run/x.sock", "wsl://-d/run/x.sock", "wsl://a b"] {
+        assert!(targets_from(bad, None).is_err(), "{bad:?} names no distribution");
+    }
+}
+
+#[test]
+fn a_server_in_wsl_is_given_time_for_wsl_to_start() {
+    let wsl = Target::Wsl { distro: "Ubuntu".into(), socket: None };
+    assert_eq!(connect_timeout(&wsl), Duration::from_secs(30));
+    let net = Target::Net(Url::parse("wss://box.ts.net").unwrap());
+    assert_eq!(connect_timeout(&net), CONNECT_TIMEOUT);
+    assert_eq!(connect_timeout(&Target::Unix("/run/rex.sock".into())), CONNECT_TIMEOUT);
+}
+
+#[test]
 fn an_address_is_looked_up_without_its_brackets() {
     let at = |url: &str| {
         let url = Url::parse(url).unwrap();
@@ -554,9 +598,9 @@ async fn a_client_that_leaves_says_goodbye() {
     assert!(link.task.await.unwrap().is_ok());
 }
 
-/// A server of one connection at a socket of its own. It hears the hello, gives
+/// A server of one connection at an address of its own. It hears the hello, gives
 /// `answer`, and hears what comes next.
-async fn serve(listener: tokio::net::UnixListener, answer: Message) -> (Value, Option<Message>) {
+async fn serve(listener: tokio::net::TcpListener, answer: Message) -> (Value, Option<Message>) {
     use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
     let (stream, _) = listener.accept().await.unwrap();
     // The size of the error is the library's choice.
@@ -579,11 +623,13 @@ async fn serve(listener: tokio::net::UnixListener, answer: Message) -> (Value, O
 
 #[tokio::test]
 async fn a_client_is_welcomed_at_a_socket_or_told_why_not() {
-    let name = format!("rexy-test-{}.sock", std::process::id());
-    let path = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_file(&path);
-    let listener = || tokio::net::UnixListener::bind(&path).unwrap();
-    let endpoint = format!("unix://{}", path.display());
+    // Each server at a port of this machine's own, and the endpoint it is at.
+    let listen = || {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        (tokio::net::TcpListener::from_std(listener).unwrap(), endpoint)
+    };
     let welcome = json!({
         "type": "welcome",
         "protocol": CONTROL_PROTOCOL,
@@ -592,15 +638,15 @@ async fn a_client_is_welcomed_at_a_socket_or_told_why_not() {
         "client": {"id": "client:1", "reconnect_token": "next"},
     });
     let welcome = Message::Text(welcome.to_string().into());
-    let server = tokio::spawn(serve(listener(), welcome));
-    let connect = |token| Control::connect(&endpoint, token, None);
-    let mut control = connect(Some("last")).await.unwrap();
+    let (listener, endpoint) = listen();
+    let server = tokio::spawn(serve(listener, welcome));
+    let mut control = Control::connect(&endpoint, Some("last"), None).await.unwrap();
     assert_eq!(control.client_id, "client:1");
     // Not the client its token was given to, unless the server says so.
     assert!(!control.resumed);
     assert_eq!(control.reconnect_token.as_deref(), Some("next"));
     // The address that answered is where a terminal's stream is sent.
-    assert_eq!(control.target, Target::Unix(path.clone()));
+    assert_eq!(control.target, Target::Net(Url::parse(&endpoint).unwrap()));
     // Leaving, it says so, and has been heard by the time it has left.
     control.close().await;
     assert!(control.task.is_finished());
@@ -613,7 +659,6 @@ async fn a_client_is_welcomed_at_a_socket_or_told_why_not() {
         panic!("the server was sent no close frame");
     };
     assert_eq!(frame.code, CloseCode::Normal);
-    std::fs::remove_file(&path).unwrap();
     // A server that cannot serve the client closes instead of welcoming it. One too
     // old to know that welcomes it at a revision it did not offer. Both are told
     // of in the same words.
@@ -621,13 +666,13 @@ async fn a_client_is_welcomed_at_a_socket_or_told_why_not() {
     let refusal = Message::Close(close(1008, &format!("no common API revision: {why}")));
     let old = json!({"type": "welcome", "protocol": CONTROL_PROTOCOL, "api_server_revision": 12});
     for answer in [refusal, Message::Text(old.to_string().into())] {
-        let server = tokio::spawn(serve(listener(), answer));
-        let Err(error) = connect(None).await else {
+        let (listener, endpoint) = listen();
+        let server = tokio::spawn(serve(listener, answer));
+        let Err(error) = Control::connect(&endpoint, None, None).await else {
             panic!("welcomed by a server too old");
         };
         let refused = Ended::Incompatible(why.into());
         assert_eq!(error.downcast_ref(), Some(&refused));
         server.await.unwrap();
-        std::fs::remove_file(&path).unwrap();
     }
 }

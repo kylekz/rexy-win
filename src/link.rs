@@ -1,10 +1,9 @@
 //! Links in a terminal's text: those its programs mark as links, and addresses
 //! written out in full. Only the kinds a browser or a mail program takes are
 //! followed. A terminal may show another machine's output, so never a `file:`.
-use std::{
-    io,
-    process::{Command, Stdio},
-};
+use std::io;
+#[cfg(unix)]
+use std::process::{Command, Stdio};
 
 use crate::terminal::Frame;
 
@@ -121,6 +120,7 @@ fn followed(target: &str) -> bool {
 }
 
 /// Hand a link to whatever the desktop opens such links with.
+#[cfg(unix)]
 pub fn open(target: &str) -> io::Result<()> {
     let mut opener = Command::new("xdg-open")
         .arg(target)
@@ -130,5 +130,42 @@ pub fn open(target: &str) -> io::Result<()> {
         .spawn()?;
     // It is waited for only so that it is not left behind when it ends.
     std::thread::spawn(move || opener.wait());
+    Ok(())
+}
+
+/// Hand a link to whatever Windows opens such links with. Only a link of a
+/// kind to follow is handed on: Windows would open a file or run a program too.
+#[cfg(windows)]
+pub fn open(target: &str) -> io::Result<()> {
+    use windows_sys::Win32::{
+        System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx},
+        UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+    };
+    if !followed(target) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a link to follow"));
+    }
+    let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (verb, target) = (wide("open"), wide(target));
+    // It may take a while to answer, so it is asked apart from the window, on a
+    // thread of its own as Windows would have it.
+    std::thread::spawn(move || {
+        // SAFETY: both strings end in a nul and outlive the calls, and the
+        // thread is set up for what the shell may ask of it first.
+        unsafe {
+            CoInitializeEx(
+                std::ptr::null(),
+                (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+            );
+            let null = std::ptr::null();
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                target.as_ptr(),
+                null,
+                null,
+                SW_SHOWNORMAL,
+            );
+        }
+    });
     Ok(())
 }

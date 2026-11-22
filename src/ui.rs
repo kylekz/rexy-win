@@ -15,11 +15,13 @@ mod input;
 mod keymap;
 mod keys;
 mod motion;
+#[cfg(target_os = "linux")]
 mod offers;
 mod palette;
 mod pane;
 mod peek;
 mod pointer;
+#[cfg(target_os = "linux")]
 mod raise;
 mod remembered;
 mod render;
@@ -27,6 +29,56 @@ mod rows;
 mod sidebar;
 mod style;
 mod toolbar;
+
+/// Elsewhere than Linux the toolkit hears what the window is offered, and the
+/// window needs no leave to come to the front: neither is ever made.
+#[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
+mod offers {
+    use std::path::PathBuf;
+
+    use eframe::egui;
+
+    use crate::upload::File;
+
+    pub enum Pasted {
+        Text(String),
+        Picture(File),
+    }
+
+    pub struct Offers {
+        pub dropped: flume::Receiver<((f64, f64), Vec<PathBuf>)>,
+        pub pasted: flume::Receiver<Pasted>,
+    }
+
+    impl Offers {
+        pub fn listen(_shown: &impl Sized, _window: egui::Context) -> Option<Self> {
+            None
+        }
+
+        pub fn renew(&mut self) {}
+
+        pub fn paste(&self, _pictures: bool) -> bool {
+            false
+        }
+
+        pub fn stop(self) {}
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
+mod raise {
+    pub struct Raise;
+
+    impl Raise {
+        pub fn of(_window: &impl Sized) -> Option<&'static Self> {
+            None
+        }
+
+        pub fn with(&self, _token: &str) {}
+    }
+}
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -53,6 +105,8 @@ use raise::Raise;
 pub use remembered::{LEAST_WINDOW, Remembered, state_home};
 use render::{PaneView, rgb};
 use rows::Rename;
+#[cfg(windows)]
+pub use style::app_icon;
 pub use style::icon;
 use style::{BODY, DIM, GUTTER, TEXT, fitted, suggested};
 
@@ -64,6 +118,8 @@ const FONT_SIZES: [f32; 2] = [9.0, 32.0];
 struct Server {
     host: Host,
     client: Client,
+    /// What it goes by.
+    name: String,
 }
 
 impl Server {
@@ -80,11 +136,14 @@ impl Server {
         let wake = Arc::new(move || ctx.request_repaint());
         let herald = herald.of(&host.label);
         let (keymap, theme) = (home.then(commands::request), theme.clone());
-        Self { client: Client::spawn(host.endpoints.clone(), wake, herald, keymap, theme), host }
+        let name = name(&host);
+        let client = Client::spawn(host.endpoints.clone(), wake, herald, keymap, theme);
+        Self { client, host, name }
     }
 
     /// Home, the server this window was opened on, has no label of its own.
     fn home(ctx: &egui::Context, endpoint: &str, herald: &Herald, theme: &Theme) -> Self {
+        crate::wsl::adopt(endpoint);
         let host = Host { endpoints: vec![endpoint.to_owned()], ..Host::default() };
         Self::connect(ctx, host, herald, theme, true)
     }
@@ -94,14 +153,21 @@ impl Server {
         self.host.endpoints.first().map_or("", String::as_str)
     }
 
-    /// Home goes by its address, unless that is a socket on this machine.
     fn label(&self) -> &str {
-        let address = self.address();
-        match self.host.label.as_str() {
-            "" if address.starts_with('/') || address.starts_with("unix:") => "This Computer",
-            "" => address.split_once("://").map_or(address, |(_, machine)| machine),
-            label => label,
-        }
+        &self.name
+    }
+}
+
+/// Home goes by its address, unless that is a socket on this machine, or in WSL.
+fn name(host: &Host) -> String {
+    let address = host.endpoints.first().map_or("", String::as_str);
+    match host.label.as_str() {
+        "" if address.starts_with('/') || address.starts_with("unix:") => "This Computer".into(),
+        "" => match crate::wsl::distro(address) {
+            Some(distro) => format!("{distro} (WSL)"),
+            None => address.split_once("://").map_or(address, |(_, machine)| machine).into(),
+        },
+        label => label.into(),
     }
 }
 
@@ -184,6 +250,8 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, endpoint: String, remembered: Remembered) -> Self {
         style::apply(&cc.egui_ctx);
+        #[cfg(windows)]
+        frame::dress(cc);
         // The fonts are read once, as the window opens: unlike the colours, a
         // change to them shows in the next window.
         fonts::install(&cc.egui_ctx, crate::ghostty::fonts());
@@ -447,6 +515,11 @@ impl eframe::App for App {
             let _ = (0..self.servers.len()).any(|server| self.reveal(server, &pane));
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            // Windows may keep another window in front, and then the taskbar says so.
+            #[cfg(windows)]
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                egui::UserAttentionType::Informational,
+            ));
         }
         self.relay();
     }

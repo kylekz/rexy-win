@@ -1,6 +1,7 @@
 //! The window's own frame, in place of the desktop's: its top row moves it, its
 //! edges size it, and three buttons in that row put it away, spread it over the
-//! screen and close it.
+//! screen and close it. On Windows the desktop's own frame is kept, and of this
+//! one only the top row is: it is drawn square, with neither buttons nor edges.
 use eframe::egui::{
     self, Align, CursorIcon, Layout, PointerButton, Rect, ResizeDirection, Sense, Stroke,
     StrokeKind, UiBuilder, Vec2, ViewportCommand,
@@ -23,6 +24,9 @@ fn spread(ctx: &egui::Context) -> bool {
 /// How round the window's corners are: as round as lets a card's corner lie
 /// evenly within, a gutter in. A window that fills its screen has square ones.
 fn corners(ctx: &egui::Context) -> f32 {
+    if cfg!(windows) {
+        return 0.0;
+    }
     match spread(ctx) {
         true => 0.0,
         false => f32::from(CARD_RADIUS) + GUTTER,
@@ -55,8 +59,39 @@ pub fn titlebar(ui: &mut egui::Ui, height: f32, inset: f32) -> egui::Ui {
     bar
 }
 
+/// On Windows the desktop's title bar is dark, and of the window's ground, to be
+/// one with the top row below it.
+#[cfg(windows)]
+pub fn dress(window: &impl raw_window_handle::HasWindowHandle) {
+    use raw_window_handle::RawWindowHandle;
+    use windows_sys::Win32::Graphics::Dwm::{
+        DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
+    };
+    let Ok(handle) = window.window_handle() else { return };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else { return };
+    let window = handle.hwnd.get() as windows_sys::Win32::Foundation::HWND;
+    let [red, green, blue, _] = super::style::VIEW.to_array();
+    // Red is the lowest byte.
+    let color = u32::from_le_bytes([red, green, blue, 0]);
+    let dark: i32 = 1;
+    // SAFETY: the window is this one, and each value is as large as it is said to
+    // be. Windows before 11 know no colour for the bar, and leave it as it was.
+    unsafe {
+        DwmSetWindowAttribute(
+            window,
+            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            (&raw const dark).cast(),
+            4,
+        );
+        DwmSetWindowAttribute(window, DWMWA_CAPTION_COLOR as u32, (&raw const color).cast(), 4);
+    }
+}
+
 /// The window's buttons, for a row laid out from the right.
 pub fn controls(ui: &mut egui::Ui) {
+    if cfg!(windows) {
+        return;
+    }
     let ctx = ui.ctx().clone();
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
@@ -81,7 +116,7 @@ pub fn controls(ui: &mut egui::Ui) {
 /// They are asked for last of all, to have the pointer before anything they lie over.
 pub fn edges(ui: &egui::Ui) {
     let ctx = ui.ctx();
-    if spread(ctx) {
+    if cfg!(windows) || spread(ctx) {
         return;
     }
     let window = ctx.content_rect();

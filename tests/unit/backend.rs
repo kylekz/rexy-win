@@ -525,12 +525,12 @@ fn a_terminal_fed_no_more_is_kept_for_its_last_screen() {
     assert!(!shown("blank") && client.terminal("blank").is_err());
 }
 
-/// A server of one connection at a socket of its own, which says what a test
+/// A server of one connection at an address of its own, which says what a test
 /// has it say.
 mod served {
     use super::*;
     use futures_util::SinkExt;
-    use tokio::net::{UnixListener, UnixStream};
+    use tokio::net::{TcpListener, TcpStream};
     use tokio_tungstenite::{
         WebSocketStream,
         tungstenite::{
@@ -539,31 +539,24 @@ mod served {
         },
     };
 
-    pub type Socket = WebSocketStream<UnixStream>;
+    pub type Socket = WebSocketStream<TcpStream>;
 
     pub struct Server {
-        path: std::path::PathBuf,
-        listener: UnixListener,
-    }
-
-    impl Drop for Server {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.path);
-        }
+        listener: TcpListener,
     }
 
     impl Server {
-        pub fn at(name: &str) -> Self {
-            let name = format!("rexy-test-{name}-{}.sock", std::process::id());
-            let path = std::env::temp_dir().join(name);
-            let _ = std::fs::remove_file(&path);
-            let listener = UnixListener::bind(&path).unwrap();
-            Self { path, listener }
+        /// One on a port of this machine's own, which every system has.
+        pub fn at(_name: &str) -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let listener = TcpListener::from_std(listener).unwrap();
+            Self { listener }
         }
 
         /// A client of it, and what the client's panes have to say.
         pub fn client(&self) -> (Client, flume::Receiver<crate::notify::Note>) {
-            let endpoint = format!("unix://{}", self.path.display());
+            let endpoint = format!("ws://{}", self.listener.local_addr().unwrap());
             let (herald, notes) = Herald::new();
             let theme = watch::channel(None).1;
             let client = Client::spawn(vec![endpoint], Arc::new(|| {}), herald, None, theme);

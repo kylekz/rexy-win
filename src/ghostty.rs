@@ -6,16 +6,21 @@
 use std::{
     collections::BTreeMap,
     env,
-    ffi::{CString, OsString},
-    fs::{self, File},
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+#[cfg(target_os = "linux")]
+use std::{
+    ffi::CString,
+    fs::File,
     io::{self, Read},
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::ffi::OsStrExt,
     },
-    path::{Path, PathBuf},
     thread,
-    time::Duration,
 };
 
 use serde_json::{Map, Value, json};
@@ -27,6 +32,7 @@ pub type Theme = watch::Receiver<Option<Value>>;
 
 /// How long after something changes the configuration is read again: a save
 /// is several things done to a directory, and is read once they all are.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const SETTLE: Duration = Duration::from_millis(200);
 
 fn var(name: &str) -> Option<OsString> {
@@ -43,9 +49,18 @@ fn config() -> Option<(PathBuf, String)> {
 }
 
 /// The directory the user's configuration is kept under.
+#[cfg(unix)]
 fn home() -> Option<PathBuf> {
     let home = var("XDG_CONFIG_HOME").map(PathBuf::from);
     home.or_else(|| Some(PathBuf::from(var("HOME")?).join(".config")))
+}
+
+/// On Windows, Ghostty's configuration is under the user's roaming application
+/// data, where nothing else has been said.
+#[cfg(windows)]
+fn home() -> Option<PathBuf> {
+    let home = var("XDG_CONFIG_HOME").map(PathBuf::from);
+    home.or_else(|| var("APPDATA").map(PathBuf::from))
 }
 
 /// The files of Ghostty's configuration under `home`, read as one, in the order
@@ -69,6 +84,7 @@ pub fn theme() -> Theme {
 /// which sleeps until then. A theme that goes is not followed: what the
 /// terminals have, they keep, and those still to come are given the same.
 /// Where nothing can be heard of, the theme stays as it was first read.
+#[cfg(target_os = "linux")]
 fn follow(home: PathBuf) -> Theme {
     // Heard of before the first read, so that nothing changes unheard between.
     let heard = Heard::new().filter(|heard| heard.of(&kept(&home)));
@@ -93,10 +109,17 @@ fn follow(home: PathBuf) -> Theme {
     theme
 }
 
+/// Elsewhere than Linux nothing is heard of: the theme is read once.
+#[cfg(not(target_os = "linux"))]
+fn follow(home: PathBuf) -> Theme {
+    watch::channel(theme_in(&home)).1
+}
+
 /// The directories the configuration under `home` is kept in: Ghostty's own,
 /// that of the user's themes, and where either file of the configuration
 /// really is, if it is a link to one kept elsewhere. A theme kept anywhere
 /// else is read again when one of these changes.
+#[cfg(target_os = "linux")]
 fn kept(home: &Path) -> Vec<PathBuf> {
     let own = home.join("ghostty");
     let files = [own.join("config"), own.join("config.ghostty")];
@@ -106,8 +129,10 @@ fn kept(home: &Path) -> Vec<PathBuf> {
 }
 
 /// What the kernel says of directories, as their files change (inotify).
+#[cfg(target_os = "linux")]
 struct Heard(File);
 
+#[cfg(target_os = "linux")]
 impl Heard {
     /// None, where the kernel will say nothing.
     fn new() -> Option<Self> {
@@ -143,8 +168,14 @@ impl Heard {
 fn theme_in(home: &Path) -> Option<Value> {
     let config = read_config(home)?;
     // A theme is a file of that name: the user's own, or one Ghostty came with.
+    #[cfg(unix)]
     let shared = var("XDG_DATA_DIRS").unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    #[cfg(unix)]
     let shared: Vec<_> = env::split_paths(&shared).collect();
+    // Ghostty has no themes of its own to share on Windows.
+    #[cfg(not(unix))]
+    let shared: Vec<PathBuf> =
+        var("XDG_DATA_DIRS").map(|dirs| env::split_paths(&dirs).collect()).unwrap_or_default();
     let named = |name: &str| {
         let own = [PathBuf::from(name), home.join("ghostty/themes").join(name)];
         let came = shared.iter().map(|dir| dir.join("ghostty/themes").join(name));

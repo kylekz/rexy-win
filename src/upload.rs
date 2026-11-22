@@ -44,6 +44,9 @@ impl File {
             Self::Path(path) => {
                 let name = path.file_name().unwrap_or(path.as_os_str());
                 let name = name.to_string_lossy().into_owned();
+                // Windows will not open a directory as a file, and says only that.
+                #[cfg(windows)]
+                ensure!(!path.is_dir(), "{name} is not a file, and only files are sent");
                 let file = std::fs::File::open(path);
                 let file = file.with_context(|| format!("{name} could not be read"))?;
                 let about = file.metadata()?;
@@ -67,9 +70,9 @@ pub fn quoted(path: &str) -> String {
     }
 }
 
-/// A new UUID as the kernel makes one, which is as Rex wants it written.
+/// A new random UUID, written as Rex wants it: in lowercase, with hyphens.
 fn id() -> Result<String> {
-    Ok(std::fs::read_to_string("/proc/sys/kernel/random/uuid")?.trim().to_owned())
+    Ok(uuid::Uuid::new_v4().hyphenated().to_string())
 }
 
 /// Send files to a pane's machine, where its terminal types their paths in

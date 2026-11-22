@@ -46,6 +46,7 @@ fn a_configuration_names_the_fonts_of_its_text() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn the_theme_follows_the_configuration_as_it_is_saved() {
     let home = std::env::temp_dir().join(format!("rexy-ghostty-theme-{}", std::process::id()));
     let _ = fs::remove_dir_all(&home);

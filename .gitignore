@@ -6,3 +6,10 @@ __pycache__/
 
 # Not ours to publish: see assets/icons/NOTICE.md.
 /assets/icons/*.svg
+
+# Built by scripts/package.ps1.
+/dist/
+
+# Rex's own icon, and what is made from it: see assets/windows/NOTICE.md.
+/assets/windows/rex.png
+/assets/rexy.ico

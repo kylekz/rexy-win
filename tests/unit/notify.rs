@@ -18,3 +18,13 @@ fn a_note_says_where_it_is_from_in_text_fit_for_the_desktop() {
     assert_eq!(long.chars().count(), MAX_TEXT + 1);
     assert!(long.ends_with('…'));
 }
+
+#[cfg(windows)]
+#[test]
+fn a_toast_takes_a_programs_text_as_text_and_its_pane_as_a_tag_of_the_length_allowed() {
+    assert_eq!(escaped("<b>Tom & \"Jerry\"</b>"), "&lt;b&gt;Tom &amp; &quot;Jerry&quot;&lt;/b&gt;");
+    assert_eq!(tag("p1"), "p1");
+    let long = format!("{}end", "é".repeat(80));
+    assert_eq!(tag(&long).chars().count(), 64);
+    assert!(tag(&long).ends_with("end"));
+}
