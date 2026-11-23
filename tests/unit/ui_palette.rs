@@ -9,6 +9,14 @@ fn what_is_typed_finds_a_part_of_any_word_in_any_case() {
 }
 
 #[test]
+fn a_session_is_made_on_the_server_on_show_first_then_any_other_connected() {
+    assert_eq!(makers(0, &[true]), [0]);
+    assert_eq!(makers(1, &[true, true, false, true]), [1, 0, 3]);
+    // The one on show is offered even while it is down, as it always was.
+    assert_eq!(makers(2, &[true, false, false]), [2, 0]);
+}
+
+#[test]
 fn a_tab_is_found_by_its_panes_and_by_a_session_it_shares() {
     use crate::model::Pane;
     let pane = |title: &str, program: &str| Pane {

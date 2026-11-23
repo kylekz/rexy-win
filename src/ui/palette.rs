@@ -37,6 +37,13 @@ fn words<'a>(session: &'a Session, tab: &'a Tab) -> Vec<&'a str> {
     std::iter::once(tab.name()).chain(panes).chain(session).collect()
 }
 
+/// The servers a session may be made on from the palette: the one on show,
+/// then every other that is connected, in the order the sidebar lists them.
+fn makers(current: usize, connected: &[bool]) -> Vec<usize> {
+    let others = (0..connected.len()).filter(|&server| server != current && connected[server]);
+    std::iter::once(current).chain(others).collect()
+}
+
 /// What the palette lists until something is typed, and what it is typed for.
 #[derive(Clone, PartialEq)]
 pub enum Listing {
@@ -227,6 +234,8 @@ impl App {
         }
         // A name that finds no session offers to make one.
         let new = named.clone().filter(|_| places && rows.is_empty());
+        let connected: Vec<bool> = views.iter().map(|view| view.connected).collect();
+        let makers = makers(current, &connected);
         // What comes after the sessions is headed by what it is.
         let mut heads = vec![(rows.len(), "Tabs")];
         // Those of the session on show come first, by their names alone and
@@ -263,20 +272,31 @@ impl App {
                 rows.push(command(label(name, title, remote), name));
             }
         }
+        // A session made on another server than the one on show, as the button
+        // beside its name in the sidebar makes one.
+        for &server in makers.iter().filter(|&&server| deeds && server != current) {
+            let label = format!("New Session on {}", self.servers[server].label());
+            if found(&[&label]) {
+                let make = Pick::Show(server, Action::CreateSession(None));
+                rows.push(row(&label, None, None, make));
+            }
+        }
         // And those of the server's own actions that are for showing.
         let served = map.served.iter().filter(|served| deeds && !served.1.is_empty());
         for (name, title, _) in served.filter(|served| found(&[&served.1, &served.0])) {
             rows.push(command(title, name));
         }
-        rows.extend(new.map(|name| {
-            // On the server on show, which is said where there are others.
+        // On the server on show first, then on any other, each said by name
+        // where there are others.
+        for &server in makers.iter().filter(|_| new.is_some()) {
+            let name = new.clone().unwrap_or_default();
             let label = match self.servers.len() {
                 1 => format!("New Session “{name}”"),
-                _ => format!("New Session “{name}” on {}", self.servers[current].label()),
+                _ => format!("New Session “{name}” on {}", self.servers[server].label()),
             };
-            let make = Pick::Show(current, Action::CreateSession(Some(name)));
-            row(&label, None, None, make)
-        }));
+            let make = Pick::Show(server, Action::CreateSession(Some(name)));
+            rows.push(row(&label, None, None, make));
+        }
         // The host that what is typed comes to, which Enter then adds or
         // changes, or those of home's own list, of which one is taken away.
         match &self.listing {
