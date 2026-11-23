@@ -9,7 +9,7 @@ use super::{
     App,
     heard::{dot, worn},
     peek,
-    style::{Icon, Item, ROW, SMALL, bold, caption, item, toggle},
+    style::{Flat, Icon, Item, ROW, SMALL, bold, caption, flat_button, item},
 };
 use crate::model::{self, Activity, Pane, Session, Tab, View};
 
@@ -121,13 +121,14 @@ impl App {
 
     /// The button that turns the sidebar to that list and back. It wears the
     /// most pressing thing any pane has to say, on any server.
-    pub(super) fn watch(&mut self, ui: &mut egui::Ui, views: &[View]) {
+    pub(super) fn watch(&mut self, ui: &mut egui::Ui, views: &[View], flat: Flat) {
         let tip = match self.activity {
             true => "Sessions and tabs",
             false => "Activity on every server",
         };
         let name = "client.sidebar.activity.toggle";
-        let button = toggle(ui, Icon::Agents, &self.keys.map.tip(tip, name), self.activity);
+        let tip = self.keys.map.tip(tip, name);
+        let button = flat_button(ui, flat, Icon::Agents, &tip, self.activity);
         let sessions = views.iter().flat_map(|view| &view.sessions);
         worn(ui, &button, sessions.map(|session| session.activity()).max());
         if button.clicked() {

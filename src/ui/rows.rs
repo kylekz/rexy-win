@@ -321,6 +321,14 @@ impl App {
         }
     }
 
+    /// How wide a tab is along the top, up to `most`, as it is drawn there.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(super) fn across(&self, ui: &egui::Ui, tab: &Tab, most: f32) -> f32 {
+        let muted = self.remembered.kept.muted.contains(&tab.id);
+        let word = speaks(tab).1.filter(|_| !muted);
+        breadth(ui, tab.name(), word.as_deref(), most).0
+    }
+
     /// The list turns to the row on show when another comes to be it, by
     /// whatever means, and stays where the user turns it otherwise.
     fn follow(&mut self, row: egui::Id, shown: bool, response: &egui::Response) {
@@ -377,15 +385,9 @@ impl App {
         // as much in colour, and the pointer is told the rest.
         let size = match across {
             true => {
-                let wide = |text: &str, size| {
-                    let font = egui::FontId::proportional(size);
-                    ui.painter().layout_no_wrap(text.into(), font, DIM).size().x
-                };
-                let name = wide(tab.name(), BODY) + 70.0;
-                let both = word.as_deref().map(|word| name + wide(word, SMALL));
-                let both = both.filter(|both| *both <= size.x);
-                word = word.filter(|_| both.is_some());
-                Vec2::new(both.unwrap_or(name).clamp(96.0, size.x), size.y)
+                let (wide, both) = breadth(ui, tab.name(), word.as_deref(), size.x);
+                word = word.filter(|_| both);
+                Vec2::new(wide, size.y)
             }
             false => size,
         };
@@ -550,6 +552,19 @@ impl App {
 fn outline(ui: &egui::Ui, row: Rect) {
     let line = Stroke::new(1.5, tints(ui.ctx()).accent);
     ui.painter().rect_stroke(row, 7, line, StrokeKind::Inside);
+}
+
+/// How wide a tab is along the top, up to `most`, by its `name`: its icon and
+/// the room for its mark or its button come to as much again as the row's
+/// own edges. Also whether its `word` fits after the name.
+fn breadth(ui: &egui::Ui, name: &str, word: Option<&str>, most: f32) -> (f32, bool) {
+    let wide = |text: &str, size| {
+        let font = egui::FontId::proportional(size);
+        ui.painter().layout_no_wrap(text.into(), font, DIM).size().x
+    };
+    let name = wide(name, BODY) + 70.0;
+    let both = word.map(|word| name + wide(word, SMALL)).filter(|both| *both <= most);
+    (both.unwrap_or(name).clamp(96.0, most), both.is_some())
 }
 
 /// What a tab has to say on its row: the most pressing thing any of its panes

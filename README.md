@@ -2,7 +2,7 @@
 
 A small, fast, native Linux client for [Rex](https://www.superlogical.com/rex), built with Rust, egui and libghostty.
 
-![Rexy showing a split tab: an editor, a chart drawn in the terminal and a training log, beside a sidebar of sessions on three servers](assets/screenshot.png)
+![Rexy on Windows with its own title bar, showing Claude Code beside a build log in a split tab, and a sidebar listing two servers](assets/screenshot.png)
 
 Every Rex server you use, with its sessions and tabs, in one window: a sidebar that tells you what each agent is doing, split panes, and a Ghostty terminal in each of them. Closing the window leaves your sessions running, and connecting never starts or installs a server.
 
@@ -15,6 +15,8 @@ This is a port of [haydn-jones/rexy](https://github.com/haydn-jones/rexy) to Win
 - **Needs WSL, with Rex's Linux server set up in it.** Rex does not run on Windows, so Rexy finds a WSL distribution running Rex and uses it as its home server. Other hosts are added from there as usual.
 - **Can use the Rex.app icon from macOS.** Put it at `assets/windows/rex.png` before building and it becomes the window, taskbar, toast and installer icon. Without it, Rexy's own icon is used. The icon is not kept in this repository: see [assets/windows/NOTICE.md](assets/windows/NOTICE.md).
 - **Adds New Session on *machine* to the command palette**, to start a session on a particular server rather than the one on show.
+- **Draws a Windows 11 title bar of its own**: one row with where you are (server › session › pane), a search box in the middle, the tab and pane buttons, and Windows' minimise, maximise and close. Hovering maximise offers Windows' snap layouts.
+- **Shows Mica behind the window** on Windows 11 22H2 and later, behind the title bar and sidebar. **Turn Off Mica Backdrop** in the command palette turns it off from the next launch.
 
 Setup, building and what does not work yet on Windows are under [Windows](#windows) below.
 
@@ -99,6 +101,8 @@ Rexy runs on Windows 11 x64 as a client for Rex in WSL, since Rex does not run o
 - **Home** is the one Rex in WSL follows, as `rex hosts` has it. The default distribution is asked first, which starts it if it is stopped, then any other already running; no other is started to ask. `REX_HOME` and `--server` still come first.
 - **`wsl://DISTRO[/SOCKET]`** reaches a server in a distribution, as in `wsl://Ubuntu`. Without a socket, that distribution's `rex` is asked where its server listens.
 - **`ssh://` runs inside WSL:** `ssh` in home's distribution, or else the one whose Rex named home, or else the default one, forwards the server's socket there, so it needs keys and a config that work in WSL.
+- **The window has no Windows frame.** Rexy draws its own title bar: drag it to move the window, double-click it to maximise, and drag any edge to size it. Snap, Win+arrow keys and snap layouts work as for any window.
+- **Mica** is drawn through Direct3D 12 with DirectComposition. If it flickers on a variable-refresh display, turn it off from the command palette.
 - **State** is kept in `%LOCALAPPDATA%\rexy`.
 
 To install, run `rexy-<version>-setup.exe`. It installs for you alone, with no administrator, and puts Rexy in the Start menu under the name its notifications go by. The zip holds the same files, to unpack anywhere.

@@ -279,9 +279,30 @@ fn other_clients_may_only_have_a_session_shown_until_they_are_let_do_more() {
     // Nor may they let themselves.
     assert!(!allowed(REMOTE, off) && allowed("pane.paste", true));
     // The palette says what choosing it does, as things stand.
-    assert_eq!(label(REMOTE, title(REMOTE), off), "Allow Remote Control");
-    assert_eq!(label(REMOTE, title(REMOTE), true), "Refuse Remote Control");
-    assert_eq!(label("pane.zoom", title("pane.zoom"), true), "Zoom Pane");
+    let kept = |remote| Kept { remote, ..Kept::default() };
+    assert_eq!(label(REMOTE, title(REMOTE), &kept(off)), "Allow Remote Control");
+    assert_eq!(label(REMOTE, title(REMOTE), &kept(true)), "Refuse Remote Control");
+    assert_eq!(label("pane.zoom", title("pane.zoom"), &kept(true)), "Zoom Pane");
+}
+
+#[test]
+fn mica_is_turned_on_and_off_from_the_palette_on_windows_alone() {
+    let kept = |mica| Kept { mica, remote: !mica, ..Kept::default() };
+    assert_eq!(label(MICA, "", &kept(true)), "Turn Off Mica Backdrop");
+    assert_eq!(label(MICA, "", &kept(false)), "Turn On Mica Backdrop");
+    assert_eq!(command(MICA).is_some(), cfg!(windows));
+    // It needs no server, nor anything on show, but a Windows that draws Mica.
+    let backdrops = crate::ui::remembered::backdrops();
+    assert!(cfg!(windows) || !backdrops);
+    let planned = plan(&View::default(), "a", MICA, Value::Null);
+    let other = Ok("other".to_owned());
+    assert_eq!(planned, if backdrops { other } else { Err("not_supported") });
+}
+
+#[test]
+fn only_mica_waits_on_what_windows_can_draw() {
+    assert!(offered(REMOTE) && offered("pane.zoom") && offered("no.such.command"));
+    assert_eq!(offered(MICA), crate::ui::remembered::backdrops());
 }
 
 #[test]

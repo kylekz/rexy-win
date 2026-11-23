@@ -27,7 +27,11 @@ mod remembered;
 mod render;
 mod rows;
 mod sidebar;
+#[cfg(windows)]
+mod snap;
 mod style;
+#[cfg(windows)]
+mod title;
 mod toolbar;
 
 /// Elsewhere than Linux the toolkit hears what the window is offered, and the
@@ -245,13 +249,42 @@ pub struct App {
     /// The colours this window gives its terminals, as Ghostty's configuration
     /// has them, for each server to follow.
     theme: Theme,
+    /// Whether Windows draws Mica behind the window, to show through its ground.
+    mica: bool,
+}
+
+/// Whether the window is made for Windows' Mica as it opens: where it is asked
+/// for, and Windows can draw it. It shows only if what draws the window can
+/// leave its ground see-through, as `App::new` finds.
+pub fn mica(remembered: &Remembered) -> bool {
+    remembered.kept.mica && remembered::backdrops()
+}
+
+/// Whether the window is drawn through Direct3D 12, which alone passes on to
+/// Windows what is see-through in it.
+#[cfg(windows)]
+fn direct3d(cc: &eframe::CreationContext<'_>) -> bool {
+    let backend = cc.wgpu_render_state.as_ref().map(|state| state.adapter.get_info().backend);
+    backend == Some(eframe::wgpu::Backend::Dx12)
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, endpoint: String, remembered: Remembered) -> Self {
         style::apply(&cc.egui_ctx);
         #[cfg(windows)]
-        frame::dress(cc);
+        {
+            frame::dress(cc);
+            snap::hook(cc);
+        }
+        // As the window was made for it as it opened, and only if Windows draws
+        // it behind what Direct3D 12 draws. A window made see-through for it is
+        // kept from showing white under its ground, whether or not it is drawn.
+        let mica = mica(&remembered);
+        #[cfg(windows)]
+        let mica = mica && {
+            frame::clear(cc);
+            direct3d(cc) && frame::mica(cc)
+        };
         // The fonts are read once, as the window opens: unlike the colours, a
         // change to them shows in the next window.
         fonts::install(&cc.egui_ctx, crate::ghostty::fonts());
@@ -305,6 +338,7 @@ impl App {
             dropped: Vec::new(),
             followed: None,
             theme,
+            mica,
         }
     }
 
@@ -501,7 +535,8 @@ impl App {
 }
 
 impl eframe::App for App {
-    /// Nothing, where the window draws nothing: past its round corners.
+    /// Nothing, where the window draws nothing: past its round corners, and
+    /// under its ground where Mica shows through.
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0.0; 4]
     }
@@ -633,9 +668,13 @@ impl eframe::App for App {
         let shown = panes.iter().find_map(|p| p.frame.as_ref());
         let shown = shown.map(|frame| (rgb(frame.bg), frame.ansi.map(rgb)));
         let ground = style::theme(&ctx, shown);
-        frame::ground(root_ui, ground);
+        frame::ground(root_ui, ground, self.mica);
         // With the sidebar, tabs are listed in it. Without, they run along the top.
         let sidebar = self.remembered.kept.sidebar;
+        // On Windows one row spans the window over both, in place of Windows' own
+        // title bar.
+        #[cfg(windows)]
+        self.title(root_ui, &views);
         if sidebar {
             self.sidebar(root_ui, &views);
         }
@@ -643,6 +682,7 @@ impl eframe::App for App {
         let shown = egui::CentralPanel::no_frame().show(root_ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             match sidebar {
+                _ if cfg!(windows) => {}
                 true => self.header(ui, view),
                 false => self.toolbar(ui, &views),
             }

@@ -56,8 +56,9 @@ zbus = { version = "6.3", default-features = false, features = ["tokio"] }
 eframe = { version = "0.37.0", default-features = false, features = ["wgpu"] }
 # Hands a link to the program Windows opens such links with, keeps the
 # processes that reach WSL from outliving this one, colours the title bar, prints
-# to the console it was run from, and tells Windows what this program is called.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Security", "Win32_System_Com", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# to the console it was run from, tells Windows what this program is called, and
+# where the window's button is that Windows offers its layouts over.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_Com", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # Shows notes as toasts. The release the window is built on already.
 windows = { version = "0.62", features = ["Data_Xml_Dom", "UI_Notifications"] }
 # Already here through egui_system_font_provider. Tells a symbol, which Windows'

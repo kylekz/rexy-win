@@ -263,13 +263,17 @@ impl App {
         }
         rows.append(&mut others);
         heads.push((rows.len(), "Commands"));
-        // All that can be done just now, but to put this list away.
-        for (name, title, _) in COMMANDS.iter().filter(|c| deeds && found(&[c.1, c.0])) {
+        // All that can be done just now, but to put this list away: found by
+        // what it is called here as well as by its title.
+        for (name, title, _) in COMMANDS.iter().filter(|_| deeds) {
+            let called = label(name, title, &self.remembered.kept);
+            if !found(&[title, name, called]) {
+                continue;
+            }
             let plan = self.standing(view).plan(name, &Value::Null, None);
             let away = |deed| matches!(deed, Deed::Palette(Listing::Places | Listing::Commands));
             if plan.is_ok_and(|deed| !away(deed)) {
-                let remote = self.remembered.kept.remote;
-                rows.push(command(label(name, title, remote), name));
+                rows.push(command(called, name));
             }
         }
         // A session made on another server than the one on show, as the button

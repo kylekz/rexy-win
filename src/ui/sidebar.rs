@@ -8,7 +8,9 @@ use super::{
     frame::titlebar,
     heard::dot,
     remembered::flip,
-    style::{BODY, BORDER, DIM, Icon, ROW, SMALL, TOOLBAR, bold, fold, icon_button, search},
+    style::{
+        BODY, BORDER, DIM, Icon, ROW, SMALL, SQUARE, TOOLBAR, bold, fold, icon_button, search,
+    },
     toolbar::bar,
 };
 use crate::model::{Action, Session, View};
@@ -35,22 +37,11 @@ impl App {
             .show(root_ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 // The button that puts the tabs along the top, where the toolbar
-                // has it then, and the way into the palette for the pointer.
-                let mut top = titlebar(ui, TOOLBAR, 8.0);
-                let (tip, toggle) = ("Tabs along the top", "client.sidebar.toggle");
-                self.button(&mut top, &views[self.current], Icon::Sidebar, tip, toggle);
-                top.add_space(2.0);
-                top.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    self.watch(ui, views);
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        let palette = "session.switch";
-                        let tip = "Search sessions and tabs";
-                        let field = search(ui, &self.keys.map.shortcut(palette));
-                        if field.on_hover_text(tip).clicked() {
-                            self.todo.push((palette, None));
-                        }
-                    });
-                });
+                // has it then, and the way into the palette for the pointer. On
+                // Windows they are in the title bar over it.
+                if !cfg!(windows) {
+                    self.top(ui, views);
+                }
                 let list = egui::ScrollArea::vertical().auto_shrink(false);
                 list.show(ui, |ui| {
                     rows.show(ui, |ui| {
@@ -74,12 +65,34 @@ impl App {
             });
     }
 
+    /// The row over the sidebar's list.
+    fn top(&mut self, ui: &mut egui::Ui, views: &[View]) {
+        let mut top = titlebar(ui, TOOLBAR, 8.0);
+        let (tip, toggle) = ("Tabs along the top", "client.sidebar.toggle");
+        self.button(&mut top, &views[self.current], SQUARE, Icon::Sidebar, tip, toggle);
+        top.add_space(2.0);
+        top.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            self.watch(ui, views, SQUARE);
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                let palette = "session.switch";
+                let tip = "Search sessions and tabs";
+                let field = search(ui, &self.keys.map.shortcut(palette));
+                if field.on_hover_text(tip).clicked() {
+                    self.todo.push((palette, None));
+                }
+            });
+        });
+    }
+
     /// The sidebar's edge, which drags to make it wider or narrower. It is asked
     /// for last of all, or the terminal beside it and the scroll bar within it
     /// would have the pointer there first.
     pub(super) fn edge(&mut self, root_ui: &egui::Ui) {
         let x = root_ui.max_rect().left() + self.remembered.kept.sidebar_width;
         let height = root_ui.max_rect().y_range();
+        // On Windows the title bar is not the sidebar's.
+        #[cfg(windows)]
+        let height = egui::Rangef::new(height.min + super::style::TITLEBAR, height.max);
         let grab = Rect::from_x_y_ranges(x - 4.0..=x + 4.0, height);
         // It takes clicks too, or a press there would be the terminal's to drag.
         let sense = Sense::click_and_drag();

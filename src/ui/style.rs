@@ -125,6 +125,10 @@ pub fn eased(ui: &egui::Ui, id: egui::Id, on: bool) -> f32 {
 }
 
 pub const TOOLBAR: f32 = 40.0;
+/// How tall the one row is that Windows has in place of its own title bar and
+/// of the rows over the sidebar and the terminals.
+#[cfg(windows)]
+pub const TITLEBAR: f32 = 48.0;
 /// How tall a row of the sidebar is, which says a line under its name.
 pub const ROW: f32 = 44.0;
 /// How far the middle of each of a row's two lines is from the row's own.
@@ -290,6 +294,9 @@ pub enum Icon {
     Peek,
     /// A pane over the corner of another: one that floats.
     Float,
+    /// Three dots in a row: more, in a list of its own.
+    #[cfg(windows)]
+    More,
     /// The pictures an action gives the things it offers, with `Plus`, and
     /// one for a thing whose picture is not among them.
     Document,
@@ -384,6 +391,12 @@ impl Icon {
             Icon::Float => {
                 window();
                 frame([0.0, 0.0], [8.0, 6.0], 1.5);
+            }
+            #[cfg(windows)]
+            Icon::More => {
+                for x in [-5.0, 0.0, 5.0] {
+                    dot([x, 0.0], 1.25);
+                }
             }
             Icon::Close => {
                 line([-4.0, -4.0], [4.0, 4.0]);
@@ -697,37 +710,54 @@ fn encode(icon: &egui::IconData) -> Vec<u8> {
     png
 }
 
-/// A flat button that draws its own symbol.
-pub fn icon_button(ui: &mut egui::Ui, icon: Icon, tip: &str) -> egui::Response {
-    button(ui, 32.0, icon, tip, false)
+/// How large a flat button is, and how round its corners.
+#[derive(Clone, Copy)]
+pub struct Flat {
+    pub size: Vec2,
+    pub radius: u8,
 }
 
-/// One that turns something on and off, and shows which it is.
-pub fn toggle(ui: &mut egui::Ui, icon: Icon, tip: &str, on: bool) -> egui::Response {
-    button(ui, 32.0, icon, tip, on)
+/// Those of a row of controls.
+pub const SQUARE: Flat = Flat { size: Vec2::splat(32.0), radius: RADIUS };
+/// Those of the title bar on Windows, wider and squarer, as Windows draws its own.
+#[cfg(windows)]
+pub const TITLED: Flat = Flat { size: Vec2::new(36.0, 32.0), radius: 4 };
+
+/// A flat button that draws its own symbol.
+pub fn icon_button(ui: &mut egui::Ui, icon: Icon, tip: &str) -> egui::Response {
+    flat_button(ui, SQUARE, icon, tip, false)
 }
 
 /// A lesser one, as small as those of a row.
 pub fn small_button(ui: &mut egui::Ui, icon: Icon, tip: &str) -> egui::Response {
-    button(ui, SMALL_BUTTON, icon, tip, false)
+    let flat = Flat { size: Vec2::splat(SMALL_BUTTON), radius: RADIUS };
+    flat_button(ui, flat, icon, tip, false)
 }
 
-fn button(ui: &mut egui::Ui, side: f32, icon: Icon, tip: &str, on: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(side), Sense::click());
+/// A flat button of any shape, which shows whether it is `on` if it turns
+/// something on and off.
+pub fn flat_button(
+    ui: &mut egui::Ui,
+    flat: Flat,
+    icon: Icon,
+    tip: &str,
+    on: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(flat.size, Sense::click());
     if on {
-        ui.painter().rect_filled(rect, RADIUS, ACTIVE);
+        ui.painter().rect_filled(rect, flat.radius, ACTIVE);
     }
-    paint_button(ui, rect, &response, icon);
+    paint_button(ui, rect, flat.radius, &response, icon);
     response.on_hover_text(tip)
 }
 
-fn paint_button(ui: &egui::Ui, rect: Rect, response: &egui::Response, icon: Icon) {
+fn paint_button(ui: &egui::Ui, rect: Rect, radius: u8, response: &egui::Response, icon: Icon) {
     let lit = eased(ui, response.id.with("over"), response.hovered());
     let fill = match response.is_pointer_button_down_on() {
         true => PRESSED,
         false => white((HOVER * lit) as u8),
     };
-    ui.painter().rect_filled(rect, RADIUS, fill);
+    ui.painter().rect_filled(rect, radius, fill);
     let color = if ui.is_enabled() { DIM } else { white(56) };
     icon.paint(ui.painter(), rect.center(), color);
 }
@@ -743,6 +773,185 @@ pub fn round_button(ui: &mut egui::Ui, icon: Icon, tip: &str) -> egui::Response 
     ui.painter().circle_filled(rect.center(), SMALL_BUTTON / 2.0, fill);
     icon.paint(ui.painter(), rect.center(), white(205));
     response.on_hover_text(tip)
+}
+
+/// The window's own buttons on Windows.
+#[cfg(windows)]
+#[derive(Clone, Copy, PartialEq)]
+pub enum Caption {
+    Minimize,
+    Maximize,
+    /// Back to the size it was before it was spread over the screen.
+    Restore,
+    Close,
+}
+
+/// The fill of the button that closes the window on Windows, under the pointer.
+#[cfg(windows)]
+const CLOSING: Color32 = Color32::from_rgb(0xc4, 0x2b, 0x1c);
+
+/// Whether the pointer is over a button, and pressed on it, as Windows says
+/// where it follows the pointer and egui does not.
+#[cfg(windows)]
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct Held {
+    pub over: bool,
+    pub down: bool,
+}
+
+/// One of the window's own buttons as Windows 11 draws them: as tall as the
+/// row, square, and lit faintly under the pointer, or for the one that
+/// closes, red with a white mark. They are fainter while the window is `away`,
+/// not the one in use. It is lit, too, as it is `held`.
+#[cfg(windows)]
+pub fn caption_button(
+    ui: &mut egui::Ui,
+    caption: Caption,
+    tip: &str,
+    away: bool,
+    held: Held,
+) -> egui::Response {
+    let size = Vec2::new(46.0, ui.available_height());
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let over = response.hovered() || held.over;
+    let lit = eased(ui, response.id.with("over"), over);
+    let pressed = response.is_pointer_button_down_on() || held.down;
+    let (fill, ink) = match caption {
+        Caption::Close if pressed => (CLOSING.gamma_multiply(0.85), TEXT),
+        Caption::Close => (CLOSING.gamma_multiply(lit), white(225).lerp_to_gamma(TEXT, lit)),
+        _ if pressed => (white(28), TEXT),
+        _ => (white((18.0 * lit) as u8), white(225)),
+    };
+    let ink = if away && !over { white(110) } else { ink };
+    ui.painter().rect_filled(rect, 0, fill);
+    glyph(ui.painter(), caption, rect.center(), ink);
+    response.on_hover_text(tip)
+}
+
+/// The mark of one of those, ten points across, in lines a point wide about
+/// the middle of a pixel.
+#[cfg(windows)]
+fn glyph(painter: &egui::Painter, caption: Caption, center: Pos2, ink: Color32) {
+    let center = center.round_to_pixel_center(painter.pixels_per_point());
+    let stroke = Stroke::new(1.0, ink);
+    let at = |x: f32, y: f32| center + egui::vec2(x, y);
+    match caption {
+        Caption::Minimize => {
+            painter.line_segment([at(-5.0, 0.0), at(5.0, 0.0)], stroke);
+        }
+        Caption::Maximize => {
+            let square = Rect::from_center_size(center, Vec2::splat(10.0));
+            painter.rect_stroke(square, 1.5, stroke, StrokeKind::Middle);
+        }
+        // One square in front, and of the one behind it only its top and right.
+        Caption::Restore => {
+            let front = Rect::from_center_size(at(-1.0, 1.0), Vec2::splat(8.0));
+            painter.rect_stroke(front, 1.5, stroke, StrokeKind::Middle);
+            painter.line(vec![at(-3.0, -5.0), at(5.0, -5.0), at(5.0, 3.0)], stroke);
+        }
+        Caption::Close => {
+            painter.line_segment([at(-5.0, -5.0), at(5.0, 5.0)], stroke);
+            painter.line_segment([at(-5.0, 5.0), at(5.0, -5.0)], stroke);
+        }
+    }
+}
+
+/// What opens the palette on Windows: a button in the middle of the title bar,
+/// drawn as a field, that says what it finds, and the keys that do the same
+/// where they fit. A glass is at its end.
+#[cfg(windows)]
+pub fn search_field(ui: &mut egui::Ui, rect: Rect, keys: &str) -> egui::Response {
+    let response = ui.allocate_rect(rect, Sense::click());
+    let lit = eased(ui, response.id.with("over"), response.hovered());
+    let fill = match response.is_pointer_button_down_on() {
+        true => white(22),
+        false => white((8.0 + 8.0 * lit) as u8),
+    };
+    let painter = ui.painter();
+    painter.rect(rect, 4, fill, Stroke::new(1.0, BORDER), StrokeKind::Inside);
+    // Its foot is a little lighter, as a field's is.
+    let foot = rect.bottom() - 0.5;
+    painter.hline(rect.x_range().shrink(3.0), foot, Stroke::new(1.0, white(34)));
+    let glass = egui::pos2(rect.right() - 18.0, rect.center().y);
+    Icon::Search.paint(painter, glass, DIM);
+    let room = rect.width() - 12.0 - 36.0;
+    let keys = painter.layout_no_wrap(keys.to_owned(), FontId::proportional(SMALL), DIM);
+    let words = "Search sessions, tabs and commands";
+    let font = FontId::proportional(13.0);
+    let said = painter.layout_no_wrap(words.to_owned(), font.clone(), DIM);
+    // The keys give way first, then the words are cut short.
+    let keyed = !keys.is_empty() && said.size().x + 16.0 + keys.size().x <= room;
+    if keyed {
+        let at = egui::pos2(glass.x - 18.0 - keys.size().x, rect.center().y - keys.size().y / 2.0);
+        painter.galley(at, keys, DIM);
+    }
+    let said = if keyed { said } else { fitted(ui, words, font, DIM, room) };
+    let at = egui::pos2(rect.left() + 12.0, rect.center().y - said.size().y / 2.0);
+    ui.painter().galley(at, said, DIM);
+    response
+}
+
+/// How wide the strip is between two of the names that say where the window is.
+pub const CHEVRON: f32 = 18.0;
+
+/// The mark in that strip, from `left`: a small chevron, pointing on.
+pub fn chevron(painter: &egui::Painter, left: Pos2, ink: Color32) {
+    let at = left + egui::vec2(CHEVRON / 2.0, 0.0);
+    let points = [[-1.5, -3.5], [2.0, 0.0], [-1.5, 3.5]].map(|point| at + Vec2::from(point));
+    painter.line(points.to_vec(), Stroke::new(1.0, ink));
+}
+
+/// The window's icon, `rect` square, one texel to a pixel: Rexy's drawing
+/// drawn that size, or Rex's own picture made that small.
+#[cfg(windows)]
+pub fn emblem(painter: &egui::Painter, rect: Rect) {
+    let ctx = painter.ctx();
+    let scale = ctx.pixels_per_point();
+    let pixels = (rect.width() * scale).round() as usize;
+    let key = egui::Id::unique(("emblem", pixels));
+    let texture = ctx.data(|data| data.get_temp::<egui::TextureHandle>(key));
+    let texture = texture.unwrap_or_else(|| {
+        let image = match REX_ICON {
+            Some(png) => shrink(&decode(png), pixels),
+            None => raster(include_str!("../../assets/dev.rexy.client.svg"), pixels),
+        };
+        let texture = ctx.load_texture("emblem", image, egui::TextureOptions::LINEAR);
+        ctx.data_mut(|data| data.insert_temp(key, texture.clone()));
+        texture
+    });
+    let corner = rect.min.round_to_pixels(scale);
+    let rect = Rect::from_min_size(corner, Vec2::splat(pixels as f32 / scale));
+    let whole = Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0));
+    painter.image(texture.id(), rect, whole, Color32::WHITE);
+}
+
+/// A picture made `side` pixels square, each the mean of those of the picture
+/// it covers, weighed by how opaque each is: what is clear lends its edge no colour.
+#[cfg(windows)]
+pub fn shrink(icon: &egui::IconData, side: usize) -> egui::ColorImage {
+    let (width, height) = (icon.width as usize, icon.height as usize);
+    // The pixels of the picture under one of `side`, along a side `of` long.
+    let span = |at: usize, of: usize| (at * of / side)..((at + 1) * of).div_ceil(side);
+    let mut pixels = Vec::with_capacity(side * side);
+    for y in 0..side {
+        for x in 0..side {
+            let (mut sum, mut count) = ([0u64; 4], 0u64);
+            for row in span(y, height) {
+                for column in span(x, width) {
+                    let at = 4 * (row * width + column);
+                    let [r, g, b, a] = [0, 1, 2, 3].map(|c| u64::from(icon.rgba[at + c]));
+                    for (total, value) in sum.iter_mut().zip([r * a, g * a, b * a, a * 255]) {
+                        *total += value;
+                    }
+                    count += 1;
+                }
+            }
+            // Premultiplied, as egui keeps them.
+            let [r, g, b, a] = sum.map(|total| (total / 255 / count.max(1)) as u8);
+            pixels.push(Color32::from_rgba_premultiplied(r, g, b, a));
+        }
+    }
+    egui::ColorImage::new([side; 2], pixels)
 }
 
 /// Text on one line, which ends in an ellipsis if it is too long for `width`.
@@ -930,7 +1139,7 @@ pub fn item(ui: &mut egui::Ui, size: Vec2, item: Item<'_>) -> (egui::Response, O
             // By a name of its own: a row's tooltip goes by the row's and a number.
             let id = response.id.with(("button", index));
             let button_response = ui.interact(button, id, Sense::click());
-            paint_button(ui, button, &button_response, *icon);
+            paint_button(ui, button, RADIUS, &button_response, *icon);
             if button_response.on_hover_text(*tip).clicked() {
                 pressed = Some(index);
             }

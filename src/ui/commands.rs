@@ -11,8 +11,9 @@ use super::{
     keymap::Keys,
     palette::Listing,
     peek,
+    remembered::Kept,
     rows::{Choice, Target},
-    style::{Icon, icon_button},
+    style::{Flat, Icon, flat_button},
 };
 use crate::{
     model::{Action, Edit, Float, Pane, Tab, View},
@@ -28,6 +29,9 @@ const HELD: bool = true;
 /// The command that lets a server's other clients have this window do things,
 /// or lets them no longer.
 pub const REMOTE: &str = "client.remote_control.toggle";
+/// The command that has Windows draw Mica behind the window, from when it is
+/// next opened, or no longer.
+pub const MICA: &str = "client.mica.toggle";
 /// The command that gives a pane a tab of its own.
 pub const TO_TAB: &str = "client.pane.to_new_tab";
 /// The command that copies all a pane has put out.
@@ -44,11 +48,14 @@ pub fn allowed(name: &str, remote: bool) -> bool {
     remote || name == "session.select"
 }
 
-/// What the palette calls a command, where that goes by how the window stands.
-pub fn label(name: &str, title: &'static str, remote: bool) -> &'static str {
-    match (name == REMOTE, remote) {
-        (true, true) => "Refuse Remote Control",
-        (true, false) => "Allow Remote Control",
+/// What the palette calls a command, where that goes by how the window is set:
+/// whether remote control is on, and Mica.
+pub fn label(name: &str, title: &'static str, kept: &Kept) -> &'static str {
+    match name {
+        REMOTE if kept.remote => "Refuse Remote Control",
+        REMOTE => "Allow Remote Control",
+        MICA if kept.mica => "Turn Off Mica Backdrop",
+        MICA => "Turn On Mica Backdrop",
         _ => title,
     }
 }
@@ -130,6 +137,9 @@ pub const COMMANDS: &[Command] = &[
     ("client.palette.toggle", "Command Palette…", ONCE),
     // Rex has no name for this either. Its own app keeps it among its settings.
     (REMOTE, "Toggle Remote Control", ONCE),
+    // Nor for this, which only Windows draws.
+    #[cfg(windows)]
+    (MICA, "Toggle Mica Backdrop", ONCE),
     ("client.mode.enter", "Enter Mode", ONCE),
     ("client.mode.exit", "Exit Mode", ONCE),
     ("client.mode.exit_all", "Exit All Modes", ONCE),
@@ -213,6 +223,12 @@ pub fn command(name: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|command| command.0 == name)
 }
 
+/// Whether a command in the table is one this window can do at all: Mica is
+/// only where Windows can draw it.
+fn offered(name: &str) -> bool {
+    name != MICA || super::remembered::backdrops()
+}
+
 /// What menus and the palette call a command.
 pub fn title(name: &str) -> &'static str {
     command(name).map_or("", |command| command.1)
@@ -285,6 +301,9 @@ pub(super) enum Deed {
     Palette(Listing),
     /// Letting a server's other clients have this window do things, or no longer.
     Remote,
+    /// Having Windows draw Mica behind the window when it is next opened, or not.
+    #[cfg(windows)]
+    Mica,
     /// Something for a pane's own terminal to do, which no server is told of:
     /// about what is selected or looked for in it, or to move through its history.
     Terminal(String, Request),
@@ -333,10 +352,11 @@ impl Standing<'_> {
     /// What a command would do just now: to the `pane` given, or else to the
     /// one with the keyboard. In place of that, the code of the error another
     /// client is answered with: `not_supported` for a name that is not in the
-    /// table, and `refused` for what cannot be done.
+    /// table, or for what this Windows cannot do, and `refused` for what
+    /// cannot be done just now.
     pub fn plan(&self, name: &str, args: &Value, pane: Option<&str>) -> Result<Deed, &'static str> {
         let name = named(name, args);
-        if command(&name).is_none() {
+        if command(&name).is_none() || !offered(&name) {
             return Err("not_supported");
         }
         self.deed(&name, args, pane).ok_or("refused")
@@ -426,6 +446,8 @@ impl Standing<'_> {
                 Deed::Turn(next?)
             }
             REMOTE => Deed::Remote,
+            #[cfg(windows)]
+            MICA => Deed::Mica,
             "client.font.increase" => Deed::Font(self.font_size + 1.0),
             "client.font.decrease" => Deed::Font(self.font_size - 1.0),
             "client.font.reset" => Deed::Font(DEFAULT_FONT_SIZE),
@@ -613,13 +635,14 @@ impl App {
         &mut self,
         ui: &mut egui::Ui,
         view: &View,
+        flat: Flat,
         icon: Icon,
         label: &str,
         name: &'static str,
     ) {
         let can = self.standing(view).plan(name, &Value::Null, None).is_ok();
         ui.add_enabled_ui(can, |ui| {
-            if icon_button(ui, icon, &self.keys.map.tip(label, name)).clicked() {
+            if flat_button(ui, flat, icon, &self.keys.map.tip(label, name), false).clicked() {
                 self.todo.push((name, None));
             }
         });
@@ -652,6 +675,16 @@ impl App {
                 let said = match *remote {
                     true => "Other clients of a server may now control this window.",
                     false => "Other clients may no longer control this window.",
+                };
+                self.toast.note(said.into());
+            }
+            #[cfg(windows)]
+            Deed::Mica => {
+                let mica = &mut self.remembered.kept.mica;
+                *mica ^= true;
+                let said = match *mica {
+                    true => "Mica shows behind the window when Rexy is next opened.",
+                    false => "The window has no Mica when Rexy is next opened.",
                 };
                 self.toast.note(said.into());
             }

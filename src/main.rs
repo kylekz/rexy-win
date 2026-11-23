@@ -105,6 +105,28 @@ const RENDERER: eframe::Renderer = eframe::Renderer::Glow;
 #[cfg(windows)]
 const RENDERER: eframe::Renderer = eframe::Renderer::Wgpu;
 
+/// How the window is drawn through Direct3D. For Mica to show through it, what
+/// is drawn goes to Windows' compositor as a picture of its own, which keeps
+/// what is see-through in it: drawn for the window itself, none of it is. Only
+/// Direct3D 12 draws so, and it is then the only one tried. Otherwise it is all
+/// as eframe has it.
+#[cfg(windows)]
+fn wgpu(mica: bool) -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::{
+        egui_wgpu::WgpuSetup,
+        wgpu::{Backends, Dx12SwapchainKind},
+    };
+    let mut options = eframe::egui_wgpu::WgpuConfiguration::default();
+    if let WgpuSetup::CreateNew(setup) = &mut options.wgpu_setup
+        && mica
+    {
+        setup.instance_descriptor.backends = Backends::DX12;
+        let dx12 = &mut setup.instance_descriptor.backend_options.dx12;
+        dx12.presentation_system = Dx12SwapchainKind::DxgiFromVisual;
+    }
+    options
+}
+
 fn main() -> eframe::Result {
     #[cfg(windows)]
     console(&std::env::args().skip(1).collect::<Vec<_>>());
@@ -150,15 +172,19 @@ fn main() -> eframe::Result {
     #[cfg(windows)]
     rexy::notify::claim();
     let remembered = rexy::ui::Remembered::load();
-    // On Windows the desktop's own frame is kept.
-    let own_frame = cfg!(not(windows));
+    // Windows' Mica shows through the window where it is asked for, and where
+    // Windows can draw it.
+    let mica = rexy::ui::mica(&remembered);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Rexy")
             // The window draws its own frame, in the row its tabs and buttons have.
-            .with_decorations(!own_frame)
-            // Its corners are round, and what lies behind the window shows past them.
-            .with_transparent(own_frame)
+            // Windows still sizes it from its edges, gives it a shadow and rounds
+            // its corners.
+            .with_decorations(false)
+            // Its corners are round, and what lies behind the window shows past
+            // them. Windows rounds them itself, and Mica shows through it.
+            .with_transparent(cfg!(not(windows)) || mica)
             .with_inner_size(remembered.kept.window)
             .with_min_inner_size(rexy::ui::LEAST_WINDOW)
             .with_app_id(rexy::notify::APP_ID)
@@ -166,6 +192,8 @@ fn main() -> eframe::Result {
         renderer: RENDERER,
         // Ctrl+C, X and V belong to terminal programs; the UI maps the clipboard itself.
         clipboard_shortcuts: false,
+        #[cfg(windows)]
+        wgpu_options: wgpu(mica),
         ..Default::default()
     };
     eframe::run_native(

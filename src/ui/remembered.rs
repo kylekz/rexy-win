@@ -58,6 +58,25 @@ pub struct Kept {
     pub folded: HashSet<String>,
     /// Whether the server's other clients may have this window do things.
     pub remote: bool,
+    /// Whether Windows' Mica shows through the window's ground, as it is read
+    /// when the window opens: a change shows in the next window.
+    pub mica: bool,
+}
+
+/// Whether Windows can draw Mica: and so whether it is on where nothing says
+/// otherwise, and offered at all.
+pub(super) fn backdrops() -> bool {
+    #[cfg(windows)]
+    return super::frame::backdrops();
+    #[cfg(not(windows))]
+    false
+}
+
+/// As at first, with nothing saved.
+impl Default for Kept {
+    fn default() -> Self {
+        Self::read(&Value::Null)
+    }
 }
 
 impl Kept {
@@ -76,6 +95,7 @@ impl Kept {
             muted: from_value(saved("muted")).unwrap_or_default(),
             folded: from_value(saved("folded")).unwrap_or_default(),
             remote: from_value(saved("remote")).unwrap_or(false),
+            mica: from_value(saved("mica")).unwrap_or_else(|_| backdrops()),
         }
     }
 
@@ -89,6 +109,7 @@ impl Kept {
             "muted": self.muted,
             "folded": self.folded,
             "remote": self.remote,
+            "mica": self.mica,
         })
     }
 

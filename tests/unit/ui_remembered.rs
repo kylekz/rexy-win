@@ -31,6 +31,7 @@ fn what_changed_is_saved_after_a_moment_and_read_back() {
     // Other clients have no say over the window until they are given it.
     assert!(!first.kept.remote);
     first.kept.remote = true;
+    first.kept.mica ^= true;
     first.kept.muted.insert("window:a".into());
     first.kept.folded.extend(["session:s".to_owned(), "unix:/a".to_owned()]);
     let place = ["session:s".to_owned(), "window:a".to_owned()];
@@ -99,4 +100,19 @@ fn a_window_returns_to_where_it_was_if_that_is_still_there() {
     assert_eq!(asked(&kept, &view), r#"Some(SelectSession("second"))"#);
     view.sessions.pop();
     assert_eq!(asked(&kept, &view), "None");
+}
+
+#[test]
+fn mica_is_as_the_file_says_or_else_as_windows_can_draw_it() {
+    let read = |text: &str| Kept::read(&serde_json::from_str(text).unwrap()).mica;
+    assert!(read(r#"{"mica": true}"#));
+    assert!(!read(r#"{"mica": false}"#));
+    // Where the file says nothing of it, or nothing it can mean, Mica is on
+    // only where Windows draws it: never off Windows.
+    let fresh = fresh().mica;
+    assert_eq!(read("{}"), fresh);
+    assert_eq!(read(r#"{"mica": "yes"}"#), fresh);
+    if !cfg!(windows) {
+        assert!(!fresh);
+    }
 }

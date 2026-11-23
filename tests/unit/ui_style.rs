@@ -123,3 +123,15 @@ fn a_menu_entry_that_cannot_be_taken_does_not_answer_a_click() {
         assert_eq!(draw(enabled, release).clicked(), enabled);
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn an_icon_made_smaller_keeps_its_colours_and_lends_none_to_what_is_clear() {
+    // Red on its left half, and clear on its right, though green there.
+    let pixel = |at: usize| if at % 4 < 2 { [255, 0, 0, 255] } else { [0, 255, 0, 0] };
+    let icon = egui::IconData { rgba: (0..16).flat_map(pixel).collect(), width: 4, height: 4 };
+    let small = shrink(&icon, 2);
+    assert_eq!(small.pixels, [Color32::RED, Color32::TRANSPARENT].repeat(2));
+    let least = shrink(&icon, 1);
+    assert_eq!(least.pixels, [Color32::from_rgba_premultiplied(127, 0, 0, 127)]);
+}
