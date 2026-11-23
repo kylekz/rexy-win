@@ -8,6 +8,16 @@ Every Rex server you use, with its sessions and tabs, in one window: a sidebar t
 
 Rexy is unofficial and not affiliated with Superlogical. It is early software for Linux, on Wayland and X11, and runs on Windows with Rex in WSL.
 
+## Windows port
+
+This is a port of [haydn-jones/rexy](https://github.com/haydn-jones/rexy) to Windows. On top of upstream it:
+
+- **Needs WSL, with Rex's Linux server set up in it.** Rex does not run on Windows, so Rexy finds a WSL distribution running Rex and uses it as its home server. Other hosts are added from there as usual.
+- **Can use the Rex.app icon from macOS.** Put it at `assets/windows/rex.png` before building and it becomes the window, taskbar, toast and installer icon. Without it, Rexy's own icon is used. The icon is not kept in this repository: see [assets/windows/NOTICE.md](assets/windows/NOTICE.md).
+- **Adds New Session on *machine* to the command palette**, to start a session on a particular server rather than the one on show.
+
+Setup, building and what does not work yet on Windows are under [Windows](#windows) below.
+
 ## Features
 
 - **Every server in one sidebar.** Your home server and every host it knows of, over a Unix socket, SSH or WebSocket.
